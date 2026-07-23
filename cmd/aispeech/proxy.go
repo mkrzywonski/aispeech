@@ -43,7 +43,7 @@ func proxyMain(args []string) int {
 
 	// Connect to the hub, identifying as the downstream agent so the hub labels
 	// the session correctly.
-	client := mcp.NewClient(&mcp.Implementation{Name: clientName, Version: version}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: clientName, Version: fullVersion()}, nil)
 	hub, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint}, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "aispeech mcp-proxy: cannot reach hub at %s: %v\n", endpoint, err)
@@ -57,7 +57,7 @@ func proxyMain(args []string) int {
 		fmt.Fprintf(os.Stderr, "aispeech mcp-proxy: list tools: %v\n", err)
 		return 1
 	}
-	srv := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: version}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: fullVersion()}, nil)
 	for _, tool := range lt.Tools {
 		toolName := tool.Name
 		srv.AddTool(tool, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {

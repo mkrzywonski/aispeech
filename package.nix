@@ -23,7 +23,8 @@ buildGoModule {
   buildInputs = [ alsa-lib libpulseaudio ];
 
   subPackages = [ "cmd/aispeech" ];
-  ldflags = [ "-s" "-w" ];
+  # Nix builds from a clean source (no .git), so stamp the version explicitly.
+  ldflags = [ "-s" "-w" "-X main.version=0.0.1-${rev}" ];
 
   # Put the speech engines on PATH and make the dlopen'd audio libs findable.
   postInstall = ''

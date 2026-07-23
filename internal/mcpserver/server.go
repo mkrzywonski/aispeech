@@ -16,13 +16,12 @@ import (
 	"github.com/mkrzywonski/aispeech/internal/session"
 )
 
-const version = "0.0.1"
-
 // maxPairAttempts caps failed pair attempts per MCP connection.
 const maxPairAttempts = 5
 
-// Options configures the server's timing behavior.
+// Options configures the server.
 type Options struct {
+	Version              string // build version, reported to the agent
 	DefaultListenTimeout time.Duration
 	MaxListenTimeout     time.Duration
 }
@@ -46,6 +45,9 @@ func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, 
 	if opts.MaxListenTimeout == 0 {
 		opts.MaxListenTimeout = 10 * time.Minute
 	}
+	if opts.Version == "" {
+		opts.Version = "dev"
+	}
 	d := &deps{reg: reg, svc: svc, store: store, voices: voices, opts: opts}
 	srv := d.build()
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
@@ -62,7 +64,7 @@ const serverInstructions = "This server is a voice channel for talking with the 
 	"says to stop, the microphone is turned off, pairing is revoked, or the session ends."
 
 func (d *deps) build() *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: version},
+	s := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: d.opts.Version},
 		&mcp.ServerOptions{Instructions: serverInstructions})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -113,7 +115,7 @@ func (d *deps) build() *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "status",
-		Description: "Report this session's voice state: whether it is paired, focused, and whether the microphone is currently active.",
+		Description: "Report the aispeech build version and this session's voice state: whether it is paired, focused, and whether the microphone is currently active.",
 	}, d.status)
 
 	return s
@@ -160,11 +162,12 @@ type okOut struct {
 }
 
 type statusOut struct {
-	Paired       bool     `json:"paired"`
-	Name         string   `json:"name"`
-	Focused      bool     `json:"focused"`
-	ListeningNow bool     `json:"listening_now"`
-	MicMode      string   `json:"mic_mode"`
+	Version       string   `json:"version"`
+	Paired        bool     `json:"paired"`
+	Name          string   `json:"name"`
+	Focused       bool     `json:"focused"`
+	ListeningNow  bool     `json:"listening_now"`
+	MicMode       string   `json:"mic_mode"`
 	OtherSessions []string `json:"other_sessions"`
 }
 
@@ -299,6 +302,7 @@ func (d *deps) status(ctx context.Context, req *mcp.CallToolRequest, _ emptyIn) 
 		}
 	}
 	return nil, statusOut{
+		Version:       d.opts.Version,
 		Paired:        v.Paired,
 		Name:          v.Name,
 		Focused:       v.Focused,

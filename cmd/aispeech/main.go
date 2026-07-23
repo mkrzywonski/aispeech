@@ -5,10 +5,12 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"time"
 
 	"github.com/mkrzywonski/aispeech/internal/authz"
@@ -20,7 +22,39 @@ import (
 	"github.com/mkrzywonski/aispeech/internal/web"
 )
 
-const version = "0.0.1"
+// version is overridable at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
+// fullVersion combines the (possibly ldflag-set) version with the VCS revision
+// Go embeds automatically for `go build` from a git checkout.
+func fullVersion() string {
+	v := version
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		var rev, when string
+		var dirty bool
+		for _, s := range bi.Settings {
+			switch s.Key {
+			case "vcs.revision":
+				rev = s.Value
+			case "vcs.time":
+				when = s.Value
+			case "vcs.modified":
+				dirty = s.Value == "true"
+			}
+		}
+		if rev != "" {
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			suffix := ""
+			if dirty {
+				suffix = "+dirty"
+			}
+			v = fmt.Sprintf("%s (%s%s %s)", v, rev, suffix, when)
+		}
+	}
+	return v
+}
 
 func main() {
 	// Subcommand: stdio↔HTTP MCP bridge spawned by an AI client.
@@ -29,12 +63,20 @@ func main() {
 	}
 
 	var (
-		addr      = flag.String("addr", "", "override bind address (default from config, e.g. 127.0.0.1:7071)")
-		devInject = flag.Bool("dev-inject", false, "enable the dev-only transcript injection endpoint (routing tests without a mic)")
+		addr        = flag.String("addr", "", "override bind address (default from config, e.g. 127.0.0.1:7071)")
+		devInject   = flag.Bool("dev-inject", false, "enable the dev-only transcript injection endpoint (routing tests without a mic)")
+		showVersion = flag.Bool("version", false, "print version and exit")
 	)
+	flag.BoolVar(showVersion, "v", false, "print version and exit (shorthand)")
 	flag.Parse()
 
+	if *showVersion {
+		fmt.Println("aispeech", fullVersion())
+		return
+	}
+
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	slog.Info("aispeech starting", "version", fullVersion())
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -99,6 +141,7 @@ func main() {
 	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore,
 		func() []string { return store.Installed(modelstore.Piper) },
 		mcpserver.Options{
+			Version:              fullVersion(),
 			DefaultListenTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,
 			MaxListenTimeout:     10 * time.Minute,
 		}))
