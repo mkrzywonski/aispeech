@@ -20,12 +20,15 @@ server the agent connects to, exactly like a tool. You keep using Claude Code
 
 - aispeech runs a persistent **MCP server over HTTP** plus a **browser UI** on
   `127.0.0.1:7071`.
-- Each AI agent connects and, after a one-time **pairing** step, gains two tools:
+- Each AI agent connects and, after a one-time **pairing** step (you copy a token
+  from the UI and paste it to the agent), gains two tools:
   - **`listen()`** — blocks until you speak a command routed to that session.
   - **`speak(text)`** — says a short reply aloud (agents are asked to keep it terse).
-- You talk using **push-to-talk**: press *Start listening*, and the mic stays hot
-  while the conversation is active, going cold after a configurable idle timeout.
-  (A constant-listen mode is available; the mic is only ever on while you ask.)
+- You talk using **push-to-talk**: click the mic icon (or press **Space**) to
+  start; the mic stays hot while you keep talking and goes cold after a
+  configurable idle timeout. The speaker row has **mute** and **pause/resume**, so
+  a too-loud or over-talkative reply is one click away — and mute persists across
+  reloads (no surprise noise at work).
 - **Session-word routing**: each connected agent has a name that doubles as a
   wake word. Say *"Claude, run the tests"* and *"Codex, open a PR"* and each
   utterance is routed to the matching session. Focus is sticky until you switch
@@ -40,8 +43,8 @@ audio devices/levels, and model management.
 
 ## Requirements
 
-- **Linux** with a running audio server (PipeWire/PulseAudio) — or Windows with
-  the hub running natively (see [WSL2](#windows--wsl2)).
+- **Linux** with a running audio server (PipeWire/PulseAudio), or Windows via
+  **WSL2** (see [Windows / WSL2](#windows--wsl2)).
 - **[whisper.cpp](https://github.com/ggerganov/whisper.cpp)** (`whisper-cli`) for STT.
 - **[piper](https://github.com/rhasspy/piper)** for TTS.
 - To build from source: **Go ≥ 1.25** and a C compiler (cgo, for audio).
@@ -87,9 +90,9 @@ Then open **http://127.0.0.1:7071**.
    Claude Code / Codex / Gemini. This registers the `aispeech mcp-proxy` stdio
    bridge in the agent's config.
 3. **Restart the agent** and ask it to use voice. It appears at the top of the
-   UI with an 8-character **pairing code** — read that code to the agent (or
-   tell it to call `pair`) and it's connected.
-4. Press **Start listening** (or the spacebar) and talk.
+   UI as *waiting to pair*. Click **Copy pairing token**, paste the token to the
+   agent in its terminal, and it calls `pair` — connected.
+4. Click the **mic icon** (or press **Space**) and talk.
 
 ---
 
@@ -116,10 +119,12 @@ equivalent `command`/`args` entry.
 Settings persist to `~/.config/aispeech/config.json` (models download to
 `~/.local/share/aispeech/models`). Most things are editable in the UI:
 
-- Input/output audio devices, speaker volume, mic gain (with **Test speaker** /
-  **Test mic** helpers).
-- STT model, TTS voice, language, and binary paths.
-- **PTT timeout** (minutes) — how long the mic stays hot after activity.
+- Input/output audio devices; speaker volume and **mute** (persisted); mic gain
+  (with **Test speaker** / **Test mic** helpers).
+- STT model, TTS voice, language, and binary paths — pick or **download** models
+  from the built-in catalog.
+- **Idle timeout** (whole minutes, on the mic row) — how long the mic stays hot
+  after activity.
 
 Flags: `--addr host:port` (override bind address), `--dev-inject` (enable a
 dev-only transcript-injection endpoint for routing tests — never use in normal
@@ -129,22 +134,33 @@ operation).
 
 ## Security
 
-The MCP endpoint is localhost HTTP. To stop a rogue local process from feeding
-the agent or siphoning your transcribed microphone audio, every session must
-complete a **pairing handshake**: the hub shows a code, you relay it to the agent
-in its TUI, and the agent calls `pair(code)`. Only then does `listen()`/`speak()`
-work. The pairing binds "the session in my UI" to "the agent in front of me".
-Bind only to loopback; there is no unauthenticated text-injection API.
+The hub is localhost HTTP. Authorization is **browser-bound**:
+
+- The browser gets an `HttpOnly` / `SameSite=Strict` session cookie on load.
+- To pair, you click **Copy pairing token** — the hub mints a single-use,
+  short-lived token (hashed at rest) and copies it to your clipboard. You paste
+  it to the agent, which calls `pair(token)`. No pairing secret is ever readable
+  over an endpoint, so a confused or rogue agent can't `curl` for it and
+  self-pair.
+- A **Host allowlist** rejects any request whose `Host` isn't the loopback/bound
+  authority (defends against DNS-rebinding web pages); mutating UI routes also
+  require a same-origin request from a known browser session.
+- `listen()` input comes only from the audio→STT pipeline — there is no
+  unauthenticated text-injection API.
+
+**Threat-model limit:** a process with full user authority (reading your
+clipboard/keystrokes, or scripting the whole browser flow) can still pair —
+localhost offers no defense there. See [DESIGN.md](DESIGN.md) §7.
 
 ---
 
 ## Windows / WSL2
 
-Run the hub **natively on Windows** (where the audio devices are) and let an
-agent inside **WSL2** connect over `localhost` — this avoids WSL2's unreliable
-microphone passthrough. WSL2 *mirrored* networking keeps the bind on
-`127.0.0.1`. (Windows/macOS builds are supported by the Go code but less tested
-than Linux.)
+Because the UI is a web page, run the hub **inside WSL2** and open
+`http://localhost:7071` from a Windows browser (WSL2 forwards `localhost`).
+Audio comes from WSLg's PulseAudio; microphone-capture reliability varies by
+setup. You can also run the hub natively on Windows or Linux. Windows/macOS
+builds compile but are less tested than Linux.
 
 ---
 
@@ -158,11 +174,12 @@ STT  ── whisper.cpp     │  wake-word router         └─ Gemini       (+
 TTS  ── piper           └  speak() / listen()
 ```
 
-- `internal/session` — pairing, focus, session-word routing, transcript log.
+- `internal/session` — agent sessions, focus, session-word routing, transcript log.
 - `internal/engine` — capture + VAD, whisper/piper drivers (hot-swappable).
 - `internal/mcpserver` — the MCP tool contract over Streamable HTTP.
 - `internal/modelstore` — model catalog + progress-tracked downloader.
 - `internal/mcpinstall` + `cmd/aispeech` (`mcp-proxy`) — agent install & bridge.
+- `internal/authz` — browser sessions, pairing tokens, Host/Origin allowlist.
 - `internal/web` — control UI and JSON API.
 
 See [DESIGN.md](DESIGN.md) for the full design rationale.

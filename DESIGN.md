@@ -32,10 +32,12 @@ Speech-to-text and text-to-speech run **locally**, with no cloud dependency.
 - **Local-only** STT and TTS.
 - Route spoken input to the correct session by a **session-word** prefix, with
   sticky focus.
-- **Privacy-first** capture: the microphone is only hot on demand (push-to-talk)
-  or in an explicit, opt-in constant-listen mode.
-- A **positive-authorization** handshake so no local process can silently feed
-  the AI or siphon transcribed audio.
+- **Privacy-first** capture: the microphone is only hot on demand — click the
+  mic (or press Space) to start; it goes cold after a configurable idle timeout.
+  Persistent mute and a pause/resume control for speech output.
+- **Browser-bound authorization** so a local process (or a confused agent that
+  `curl`s the hub) cannot obtain a pairing secret, start listening, or inject
+  voice, plus a Host allowlist against DNS-rebinding web pages.
 - Single-binary distribution per platform (goreleaser + nix flake, as in aish).
 
 ### Non-goals
@@ -83,21 +85,28 @@ Speech-to-text and text-to-speech run **locally**, with no cloud dependency.
 
 - **MCP server** — Streamable HTTP transport (multi-client, persistent). Exposes
   the tool contract in §5. Each connected agent is one *session*.
-- **Web UI server** — serves the local GUI (embedded assets) and a small control
-  API (device/voice selection, focus, session list, pairing approval display).
+- **Web UI server** — serves the local GUI (embedded assets) and the control API
+  (device/level selection, focus, session list, pairing-token issuance, model
+  download, agent install). Mutating routes are guarded (§7).
 - **Audio engine** — cross-platform capture and playback via `malgo`
   (miniaudio: WASAPI on Windows, ALSA/PulseAudio on Linux). Owns device
-  selection and the microphone on/off lifecycle.
-- **STT** — `whisper.cpp` invoked as a child process (or via its Go bindings).
-  VAD-based endpointing (Silero VAD or equivalent) to segment utterances within
-  a listening dialog.
+  selection, the microphone on/off lifecycle, and playback (live volume/mute,
+  interruptible for pause).
+- **STT** — `whisper.cpp` invoked as a child process. Energy-based VAD endpoints
+  utterances within a listening dialog (Silero VAD is a possible future upgrade).
 - **TTS** — `piper` invoked as a child process; text in, WAV out, played via the
-  audio engine.
+  audio engine. `speak()` calls are serialized FIFO.
 - **Router** — normalizes a transcript, matches a leading **session-word**
   against session names, sets focus, and delivers the command to the focused
   session (or drops it, per §6).
-- **Controller / focus state machine** — the single source of truth for focus,
-  listening mode, mic state, and per-session listening status.
+- **Model store** (`modelstore`) — a curated catalog of whisper/piper models with
+  a progress-tracked, atomically-installing downloader; engines hot-reload when a
+  model is selected or downloaded.
+- **Agent install** (`mcpinstall`) + **`aispeech mcp-proxy`** — registers a stdio
+  bridge in each agent's config (Claude Code, Codex, Gemini) that forwards to the
+  shared HTTP hub; the GUI drives install/remove.
+- **Authorization** (`authz`) — the browser-session principal, single-use pairing
+  tokens, and the Host/Origin allowlist (see §7).
 
 ### Language and stack
 
@@ -115,21 +124,18 @@ Speech-to-text and text-to-speech run **locally**, with no cloud dependency.
 
 ## 4. Interaction model
 
-### Push-to-talk dialogs (default)
+### Push-to-talk dialogs
 
-- The user presses PTT to **open a listening dialog**. The mic goes hot and a
-  prominent mic-on indicator appears in the UI.
+- The user **clicks the mic icon** (or presses **Space**) to toggle listening.
+  The mic turns red (its off-state shows a red circle-with-slash), a page-level
+  border appears, and the tab title/favicon go red — an unmissable "hot" cue.
 - Within the dialog, utterances are endpointed by VAD; the user can issue
   multiple commands hands-free.
-- The dialog **times out** after a configurable idle period (default ~3 min),
-  after which the mic goes cold. Activity resets the timer.
-- A **hold-to-talk** variant (record only while held) is available as an option
-  for the most conservative privacy posture.
-
-### Constant-listen mode (opt-in, per session)
-
-- The mic stays hot indefinitely. Off by default; must be explicitly enabled.
-  The mic-on indicator is always visible while active.
+- The dialog **times out** after a configurable idle period (a whole-minute field
+  in the mic row; default 3 min); activity resets the timer.
+- The engine also has an always-on "constant" mode; it is not currently surfaced
+  in the UI. A true global (unfocused) hotkey and a hold-to-talk variant remain
+  future work (§11).
 
 > **PTT hotkey scope (v1 limitation).** A browser page can only capture a hotkey
 > while focused. v1 ships **page-focused PTT** (button / spacebar in the UI). A
@@ -153,6 +159,12 @@ Speech-to-text and text-to-speech run **locally**, with no cloud dependency.
 
 - `speak()` voices **terse, agent-chosen** text — not everything printed. The
   tool description instructs brevity; a hard character cap (config) enforces it.
+- Concurrent `speak()` calls are **serialized FIFO** — one audio output can't
+  play two replies at once.
+- The speaker row has a **mute** toggle (click the speaker icon; persisted across
+  restarts, so a reload never blares) and a **pause/resume** control that cuts
+  the current utterance and holds further output. Volume and mute apply live,
+  mid-utterance.
 - A suggested `CLAUDE.md` etiquette line will steer the agent: *speak short
   confirmations and answers; let detail scroll in the TUI.*
 
@@ -160,13 +172,13 @@ Speech-to-text and text-to-speech run **locally**, with no cloud dependency.
 
 ## 5. MCP tool contract
 
-Server registered as `voice` (tools appear to the agent as `mcp__voice__*`).
+Server registered as `aispeech` (tools appear to the agent as `mcp__aispeech__*`).
 All tools except `pair` require the session to be **paired** (see §7); calls
-before pairing return an `unpaired` result with guidance.
+before pairing return an error with guidance.
 
 | Tool | Params | Returns | Notes |
 |---|---|---|---|
-| `pair` | `code: string` | `{ ok, session_id, name }` or error | Authorizes this connection. `name` defaults to the MCP `clientInfo` name (e.g. `claude`); user-renamable in the UI. |
+| `pair` | `token: string` | `{ ok, session_id, name }` or error | Authorizes this connection with a browser-issued token the user copies from the UI and pastes in (see §7). Failed attempts are rate-limited. `name` defaults to the MCP `clientInfo` name (e.g. `claude`); user-renamable in the UI. |
 | `listen` | `timeout_seconds?: int` | `{ text, session }` on an utterance routed here; `{ status: "timeout" }` otherwise | **Long-poll.** Blocks until an utterance is endpointed and routed to *this* focused session, or timeout. Emits MCP `progress` notifications as keepalive. On timeout the agent may call again or stop. |
 | `speak` | `text: string` | `{ ok, spoken_chars, truncated }` | Enqueues TTS to the selected output; returns after playback (bounded). Enforces the character cap. |
 | `end_session` | — | `{ ok }` | Drops this voice channel; releases focus if held. The agent's escape hatch. |
@@ -234,8 +246,7 @@ Superseding an earlier design in which the hub displayed an agent-generated
 pairing code in the world-readable `/api/state` (any local process — including a
 confused agent that `curl`s the hub — could read the code and self-pair). The
 current model makes the **browser UI a separate principal** and never exposes a
-pairing secret over a readable endpoint. See `BROWSER_PAIRING_PLAN.md` for the
-full design and threat-model limits.
+pairing secret over a readable endpoint.
 
 1. On first load, `GET /` issues an `HttpOnly`, `SameSite=Strict` browser-session
    cookie. The agent connects over MCP and is told it is **unpaired**: *"Ask the
@@ -281,38 +292,43 @@ reads of a pairing secret.
 
 ## 8. Windows / WSL2 topology
 
-The GUI and audio must run where the audio devices are: **on the Windows host**
-(WSL2 microphone passthrough via WSLg is unreliable). The agent may run on the
-host (PowerShell) or in WSL2; both connect to the same host-side hub.
+Because the control surface is a **web UI**, the hub can run wherever is
+convenient and the browser reaches it over `localhost`:
 
-| Agent location | Hub location | Transport reach |
-|---|---|---|
-| Linux (native) | same host | `127.0.0.1:PORT` |
-| Windows PowerShell | Windows host | `127.0.0.1:PORT` |
-| Windows WSL2 (**mirrored** networking) | Windows host | `127.0.0.1:PORT` (localhost shared) — **recommended** |
-| Windows WSL2 (NAT networking) | Windows host | Windows reachable via the WSL default-gateway IP; hub binds to the WSL adapter host IP only |
+- **Linux / NixOS:** run the hub; open `http://127.0.0.1:7071` locally.
+- **Windows + WSL2:** run the hub **inside WSL** and open the UI from a Windows
+  browser at `http://localhost:7071` (WSL2 forwards `localhost`). Audio comes
+  from WSLg's PulseAudio; microphone-capture reliability varies by setup.
+- **Windows native (PowerShell):** run the hub on Windows directly.
 
-**Recommendation:** enable WSL2 **mirrored networking** (`networkingMode =
-mirrored`) so the agent in WSL reaches the hub at plain `localhost` and the hub
-binds only to `127.0.0.1`. The doc/install flow will detect and guide this.
+The agent connects to the hub the same way in every case — the `mcp-proxy` stdio
+bridge, or a direct HTTP MCP client. Wherever the hub binds beyond pure loopback
+(e.g. a WSL-reachable interface), the **Host allowlist** (§7) is what keeps the
+surface safe; never bind `0.0.0.0` without it.
 
 ---
 
 ## 9. Configuration
 
-Persisted config (with sane defaults):
+Persisted config (`~/.config/aispeech/config.json`, with sane defaults):
 
-- Audio input device, output device.
-- STT: model path/size (whisper.cpp), language.
-- TTS: piper voice model, rate/volume.
-- PTT: mode (dialog vs hold), dialog idle timeout (default ~3 min).
-- `speak()` character cap.
-- Server port; WSL networking note.
-- Per-session: display name (session-word), constant-listen toggle.
+- Bind address; audio input/output device.
+- Levels: output volume, input gain, and **muted** (persisted so a reload is
+  never loud).
+- STT: whisper binary + model path, language. TTS: piper binary + voice path.
+- Models directory (downloads land here; default `~/.local/share/aispeech/models`).
+- PTT dialog idle timeout; `speak()` character cap.
+
+Session display names (session-words) are set live in the UI, not persisted.
 
 ---
 
 ## 10. Phased build plan
+
+> **Status:** Phases 0–4 are implemented, plus extras beyond the original plan —
+> a model catalog + downloader with hot-reload, GUI agent-install via the
+> `mcp-proxy` stdio bridge, mute/pause playback controls, and browser-bound token
+> pairing with a Host allowlist (§7). The phases below are kept for context.
 
 **Phase 0 — skeleton.** Go project; embedded web UI shell; MCP Streamable-HTTP
 server that a Claude Code session can connect to and list `voice` tools; config
@@ -342,15 +358,18 @@ pluggable cloud engines behind the STT/TTS interface (kept optional).
 
 ## 11. Open questions / future work
 
-- **Global PTT hotkey.** Page-focused PTT ships first. A cross-platform global
-  hotkey needs a native helper; Wayland/NixOS is the hard case. Evaluate an
-  optional always-on-top mic widget or a HID foot-pedal path.
-- **VAD choice.** Silero VAD (ONNX) vs `webrtcvad` vs whisper.cpp's built-in
-  endpointing — pick during Phase 1 on latency/accuracy.
-- **whisper.cpp: child process vs Go bindings.** Start with child process for
-  packaging simplicity; revisit bindings if latency demands it.
-- **speak() return timing.** Return after playback (bounded) vs fire-and-forget
-  with a status poll — decide during Phase 2 from how the agent loop feels.
-- **Barge-in.** Interrupting TTS by speaking; deferred but keep the audio engine
-  design compatible.
+- **Global PTT hotkey.** Page-focused PTT (mic click / Space) ships; a
+  cross-platform *global* hotkey and a hold-to-talk variant remain future work
+  (Wayland/NixOS is the hard case). Evaluate a native helper or a HID foot-pedal.
+- **VAD.** Energy-based endpointing is implemented; Silero VAD (ONNX) is a
+  possible accuracy upgrade, especially in noisy rooms.
+- **whisper.cpp / piper** run as child processes (chosen for packaging
+  simplicity); Go bindings remain a latency option.
+- **`speak()`** returns after playback and calls are FIFO-serialized. The
+  stop/pause control covers manual interruption; barge-in *by voice* over TTS is
+  still future work.
+- **Pairing hardening (Phase 2).** Per-tab↔agent binding with focus/revoke
+  gating, cross-session transcript filtering, and CSRF tokens.
+- **Persistent agent credential** so an agent restart doesn't require re-pairing
+  (proxy stores an issued credential in a `0600` file).
 - **Project name / branding.** "aispeech" is a working title.
