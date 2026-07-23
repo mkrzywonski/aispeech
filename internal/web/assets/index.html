@@ -35,11 +35,19 @@
 
   .ptt { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
          padding: 1rem; border: 1px solid #8883; border-radius: 12px; background: #8880; }
-  .mic { font-weight: 600; padding: .3rem .75rem; border-radius: 999px; border: 1px solid #8888; }
-  .mic.hot { background: #e5484d; color: #fff; border-color: #e5484d; animation: pulse 1.2s ease-in-out infinite; }
+  .mic { display: inline-flex; align-items: center; }
+  .mic svg { color: #888; }
+  .mic.hot svg { color: #e5484d; }
+  .mic .slash { display: inline; }
+  .mic.hot .slash { display: none; }
+  .mic.hot svg { animation: micpulse 1.3s ease-in-out infinite; }
   .mic.stale { opacity: .4; }
-  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 #e5484d66; } 50% { box-shadow: 0 0 0 6px #e5484d00; } }
+  @keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
   .ptt .big { font-size: 1.05rem; padding: .6rem 1.2rem; }
+  .ptt .idle { opacity: .85; }
+  .ptt .idle input { font: inherit; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
+  .volwrap { display: inline-flex; align-items: center; gap: .4rem; }
+  #mute.active { color: #e5484d; border-color: #e5484d; }
 
   .tablewrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
@@ -102,10 +110,19 @@
 
 <!-- PTT + sessions: primary -->
 <div class="ptt">
-  <span id="mic" class="mic" role="status" aria-live="polite">Mic off</span>
+  <span id="mic" class="mic" role="status" aria-live="polite" aria-label="Microphone off" title="Microphone off">
+    <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="10" rx="3" fill="currentColor" stroke="none"></rect>
+      <path d="M6 11a6 6 0 0 0 12 0"></path>
+      <line x1="12" y1="17" x2="12" y2="21"></line>
+      <line x1="8.5" y1="21" x2="15.5" y2="21"></line>
+      <g class="slash" stroke="#e5484d"><circle cx="12" cy="12" r="11" fill="none"></circle><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"></line></g>
+    </svg>
+  </span>
   <button class="primary big" id="ptt">Start listening</button>
-  <label style="margin-left:.5rem"><input type="checkbox" id="constant"> constant listen</label>
-  <span class="cap">Space toggles listening. Mic is only on while listening.</span>
+  <label class="idle">Stop listening after <input type="number" id="idlemin" min="0.25" step="0.25"> minutes idle</label>
+  <span class="volwrap" title="Speaker volume">🔊 <input type="range" id="vol" min="0" max="2" step="0.05"><span class="lvl" id="volv"></span> <button id="mute">Mute</button></span>
+  <span class="cap">Space toggles listening.</span>
 </div>
 
 <h2>Sessions</h2>
@@ -141,8 +158,6 @@
     <select id="in"></select>
     <label for="out">Speaker</label>
     <select id="out"></select>
-    <label for="vol">Speaker volume</label>
-    <div><input type="range" id="vol" min="0" max="2" step="0.05"><span class="lvl" id="volv"></span></div>
     <label for="gain">Mic gain</label>
     <div><input type="range" id="gain" min="0" max="3" step="0.05"><span class="lvl" id="gainv"></span></div>
     <label>Test</label>
@@ -153,13 +168,6 @@
     </div>
   </div>
   <p id="noaudio" class="muted" hidden>No audio backend available on this host.</p>
-
-  <h2>Interaction</h2>
-  <div class="grid">
-    <label for="ptttimeout">PTT timeout</label>
-    <div><input type="number" id="ptttimeout" min="0.25" step="0.25" style="width:5rem"> minutes
-      <span class="cap">— after pressing Start listening, the mic stays hot while you keep talking, and turns off after this much silence.</span></div>
-  </div>
 
   <h2>Models</h2>
   <div class="grid">
@@ -208,7 +216,7 @@ function setDrawer(open) {
   $('settings').hidden = !open;
   $('gear').setAttribute('aria-expanded', String(open));
   localStorage.setItem('aispeech.settings', open ? '1' : '0');
-  if (open) { refreshAudio(); refreshModels(); refreshInstall(); refreshInteraction(); }
+  if (open) { refreshAudio(); refreshModels(); refreshInstall(); }
 }
 $('gear').onclick = () => setDrawer($('settings').hidden);
 $('voicewarnbtn').onclick = () => { setDrawer(true); $('settings').scrollIntoView({ behavior: 'smooth' }); };
@@ -216,7 +224,10 @@ $('voicewarnbtn').onclick = () => { setDrawer(true); $('settings').scrollIntoVie
 // --- PTT ---
 let micHot = false;
 $('ptt').onclick = () => post(micHot ? '/api/ptt/stop' : '/api/ptt/start');
-$('constant').onchange = (e) => post('/api/listen/constant', { on: e.target.checked });
+$('idlemin').onchange = (e) => {
+  const m = parseFloat(e.target.value); if (!(m > 0)) return;
+  fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_minutes: m }) });
+};
 document.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' || e.repeat) return;
   const t = e.target.tagName;
@@ -231,8 +242,22 @@ $('devtext').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('devs
 async function postAudio(u) { await fetch('/api/audio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(u) }); }
 $('in').onchange = (e) => postAudio({ input_device: e.target.value });
 $('out').onchange = (e) => postAudio({ output_device: e.target.value });
+let lastVol = 1;
 $('vol').oninput = (e) => { $('volv').textContent = fmtPct(e.target.value); };
-$('vol').onchange = (e) => postAudio({ volume: parseFloat(e.target.value) });
+$('vol').onchange = (e) => { const v = parseFloat(e.target.value); if (v > 0) lastVol = v; setVol(v, true); };
+$('mute').onclick = () => {
+  const cur = parseFloat($('vol').value);
+  if (cur > 0) { lastVol = cur; setVol(0, true); } else { setVol(lastVol > 0 ? lastVol : 1, true); }
+};
+function setVol(v, save) {
+  $('vol').value = v; $('volv').textContent = fmtPct(v);
+  $('mute').textContent = v > 0 ? 'Mute' : 'Unmute';
+  $('mute').classList.toggle('active', v == 0);
+  if (save) postAudio({ volume: v });
+}
+async function initVolume() {
+  try { const a = await (await fetch('/api/audio')).json(); if (a.volume > 0) lastVol = a.volume; setVol(a.volume, false); } catch (e) {}
+}
 $('gain').oninput = (e) => { $('gainv').textContent = fmtPct(e.target.value); };
 $('gain').onchange = (e) => postAudio({ gain: parseFloat(e.target.value) });
 const fmtPct = (v) => Math.round(parseFloat(v) * 100) + '%';
@@ -273,7 +298,7 @@ async function refreshAudio() {
   $('audiogrid').style.display = a.available ? '' : 'none';
   fillSelect($('in'), a.input || [], a.input_device);
   fillSelect($('out'), a.output || [], a.output_device);
-  if (document.activeElement !== $('vol')) { $('vol').value = a.volume; $('volv').textContent = fmtPct(a.volume); }
+  if (document.activeElement !== $('vol')) { if (a.volume > 0) lastVol = a.volume; setVol(a.volume, false); }
   if (document.activeElement !== $('gain')) { $('gain').value = a.gain; $('gainv').textContent = fmtPct(a.gain); }
 }
 
@@ -376,25 +401,11 @@ async function refreshInstall() {
   } catch (e) {}
 }
 
-// --- interaction (PTT timeout) ---
-$('ptttimeout').onchange = (e) => {
-  const m = parseFloat(e.target.value); if (!(m > 0)) return;
-  fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_minutes: m }) });
-};
-async function refreshInteraction() {
-  if ($('settings').hidden) return;
-  try {
-    const d = await (await fetch('/api/interaction')).json();
-    if (document.activeElement !== $('ptttimeout')) $('ptttimeout').value = d.dialog_timeout_minutes;
-  } catch (e) {}
-}
-
 // --- favicon / mic-hot ---
 function setFav(hot) {
   const color = hot ? '%23e5484d' : '%23888';
   $('fav').href = `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='${color}'/></svg>`;
 }
-const MIC_LABELS = { idle: 'Mic off', dialog: 'Listening — push to talk', constant: 'Listening — constant' };
 const TAG_LABELS = { delivered: 'delivered', dropped: 'dropped · not listening', 'no-session': 'no session in focus', focus: 'focus' };
 const TAG_TIPS = { delivered: 'Routed to the focused session', dropped: 'Target session had no pending listen() call', 'no-session': 'No session is in focus', focus: 'Focus switched by wake word' };
 
@@ -450,14 +461,15 @@ function renderPending(pending) {
 function render(state) {
   micHot = state.mic_mode !== 'idle';
   const mic = $('mic');
-  mic.textContent = MIC_LABELS[state.mic_mode] || state.mic_mode;
   mic.classList.toggle('hot', micHot); mic.classList.remove('stale');
+  mic.setAttribute('aria-label', micHot ? 'Microphone on' : 'Microphone off');
+  mic.title = micHot ? 'Microphone on' : 'Microphone off';
   document.body.classList.toggle('listening', micHot);
   setFav(micHot);
   document.title = micHot ? '🔴 aispeech — listening' : 'aispeech';
   $('ptt').textContent = micHot ? 'Stop listening' : 'Start listening';
   $('ptt').classList.toggle('active', micHot);
-  $('constant').checked = state.mic_mode === 'constant';
+  if (document.activeElement !== $('idlemin')) $('idlemin').value = state.dialog_timeout_minutes;
   $('devbox').hidden = !state.dev_inject;
 
   // voice-not-ready warning + PTT gating
@@ -509,6 +521,7 @@ async function refresh() {
 }
 
 if (localStorage.getItem('aispeech.settings') === '1') setDrawer(true);
+initVolume();
 refresh();
 setInterval(refresh, 600);
 setInterval(refreshAudio, 3000);

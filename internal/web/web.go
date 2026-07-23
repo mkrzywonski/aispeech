@@ -354,22 +354,24 @@ type stateResp struct {
 	Sessions    []session.SessionView `json:"sessions"`
 	Notices     []session.Notice      `json:"notices"`
 	Transcripts []session.Transcript  `json:"transcripts"`
-	MicMode     string                `json:"mic_mode"`
-	STTReady    bool                  `json:"stt_ready"`
-	TTSReady    bool                  `json:"tts_ready"`
-	DevInject   bool                  `json:"dev_inject"`
+	MicMode              string        `json:"mic_mode"`
+	STTReady             bool          `json:"stt_ready"`
+	TTSReady             bool          `json:"tts_ready"`
+	DialogTimeoutMinutes float64       `json:"dialog_timeout_minutes"`
+	DevInject            bool          `json:"dev_inject"`
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	views, notices, transcripts := s.reg.Snapshot()
 	writeJSON(w, stateResp{
-		Sessions:    views,
-		Notices:     notices,
-		Transcripts: transcripts,
-		MicMode:     s.svc.Mode().String(),
-		STTReady:    s.svc.STTReady(),
-		TTSReady:    s.svc.TTSReady(),
-		DevInject:   s.devInj,
+		Sessions:             views,
+		Notices:              notices,
+		Transcripts:          transcripts,
+		MicMode:              s.svc.Mode().String(),
+		STTReady:             s.svc.STTReady(),
+		TTSReady:             s.svc.TTSReady(),
+		DialogTimeoutMinutes: s.svc.DialogTimeout().Minutes(),
+		DevInject:            s.devInj,
 	})
 }
 
