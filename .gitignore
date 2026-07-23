@@ -1,0 +1,6 @@
+/aispeech
+/dist/
+*.onnx
+*.bin
+models/
+/result

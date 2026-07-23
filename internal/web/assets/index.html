@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aispeech</title>
+<link rel="icon" id="fav" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='%23888'/></svg>">
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 system-ui, sans-serif; margin: 0 auto; padding: 1.5rem; max-width: 900px; border-top: 4px solid transparent; }
+  body.listening { border-top-color: #e5484d; }
+  h1 { font-size: 1.3rem; margin: 0 0 1rem; display: flex; align-items: center; gap: .6rem; }
+  h1 small { font-weight: normal; opacity: .65; font-size: .8rem; }
+  h1 .spacer { flex: 1; }
+  h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; opacity: .7; margin: 1.6rem 0 .6rem; }
+  .hint { font-size: .82rem; opacity: .7; margin: .2rem 0 .6rem; }
+  button { font: inherit; padding: .45rem .8rem; border-radius: 7px; border: 1px solid #8888; background: #8881; cursor: pointer; }
+  button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible { outline: 2px solid #2d7cf0; outline-offset: 2px; }
+  button.primary { background: #2d7cf0; color: #fff; border-color: #2d7cf0; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  button.active { background: #e5484d; color: #fff; border-color: #e5484d; }
+  .gear { font-size: .85rem; position: relative; }
+  .gear.attn::after { content: ''; position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; background: #f5a623; }
+  .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+  .banner { padding: .7rem 1rem; border-radius: 10px; margin-bottom: 1rem; }
+  .banner.err { background: #e5484d1a; border: 1px solid #e5484d; }
+  .banner.warn { background: #f5a6231f; border: 1px solid #f5a62399; }
+  .banner button { margin-left: .5rem; }
+
+  .pending { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; padding: .7rem 1rem; margin-bottom: .6rem;
+             border: 1px solid #2d7cf0; background: #2d7cf015; border-radius: 10px; }
+  .pending .code { font-family: ui-monospace, monospace; font-size: 1.2rem; letter-spacing: .14em; background: #f5a62333; padding: .15rem .5rem; border-radius: 6px; }
+  .pending .who { font-weight: 600; }
+
+  .ptt { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+         padding: 1rem; border: 1px solid #8883; border-radius: 12px; background: #8880; }
+  .mic { font-weight: 600; padding: .3rem .75rem; border-radius: 999px; border: 1px solid #8888; }
+  .mic.hot { background: #e5484d; color: #fff; border-color: #e5484d; animation: pulse 1.2s ease-in-out infinite; }
+  .mic.stale { opacity: .4; }
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 #e5484d66; } 50% { box-shadow: 0 0 0 6px #e5484d00; } }
+  .ptt .big { font-size: 1.05rem; padding: .6rem 1.2rem; }
+
+  .tablewrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: .5rem .4rem; border-bottom: 1px solid #8884; vertical-align: middle; }
+  th { font-size: .75rem; text-transform: uppercase; letter-spacing: .04em; opacity: .72; }
+  tr.focus td { background: #2d7cf012; }
+  tr.focus td:first-child { box-shadow: inset 3px 0 0 #2d7cf0; }
+  .code { font-family: ui-monospace, monospace; font-size: 1.05rem; letter-spacing: .1em; background: #f5a62333; padding: .1rem .4rem; border-radius: 5px; }
+  .pill { font-size: .72rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid #8888; }
+  .pill.on { background: #30a46c; color: #fff; border-color: #30a46c; }
+  .pill.off { background: #e5484d; color: #fff; border-color: #e5484d; }
+  .star { color: #2d7cf0; }
+
+  .transcripts { border: 1px solid #8884; border-radius: 8px; padding: .5rem .7rem; max-height: 260px; overflow-y: auto; background: #8880; }
+  .tr { padding: .25rem 0; border-bottom: 1px solid #8882; display: flex; gap: .6rem; align-items: baseline; }
+  .tr:last-child { border-bottom: 0; }
+  .tr .t { opacity: .5; font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .tr .txt { flex: 1; }
+  .tr .tag { font-size: .68rem; padding: .05rem .45rem; border-radius: 999px; border: 1px solid #8888; white-space: nowrap; }
+  .tag.delivered { background: #30a46c; color: #fff; border-color: #30a46c; }
+  .tag.dropped, .tag.no-session { background: #e5484d; color: #fff; border-color: #e5484d; }
+  .tag.focus { background: #2d7cf0; color: #fff; border-color: #2d7cf0; }
+
+  .notices { margin-top: 1rem; font-size: .85rem; }
+  .notices li { list-style: none; padding: .12rem 0; opacity: .85; }
+  .notices li.warn { color: #e5484d; opacity: 1; }
+  .name-in { font: inherit; width: 8rem; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
+
+  .settings { margin-top: 1.5rem; padding: .5rem 1.2rem 1.2rem; border: 1px solid #8884; border-radius: 12px; background: #8880; }
+  .grid { display: grid; grid-template-columns: auto 1fr; gap: .55rem 1rem; align-items: center; max-width: 660px; }
+  .grid label { opacity: .8; }
+  select, input[type=range] { font: inherit; }
+  select { padding: .3rem; border-radius: 6px; border: 1px solid #8888; background: transparent; max-width: 100%; }
+  input[type=range] { width: 200px; vertical-align: middle; }
+  .lvl { font-variant-numeric: tabular-nums; opacity: .75; margin-left: .3rem; }
+  .cap { font-size: .78rem; opacity: .65; }
+  .testrow { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .meter { flex: 1; min-width: 120px; max-width: 220px; height: 14px; border: 1px solid #8888; border-radius: 7px; overflow: hidden; background: #8881; }
+  .meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#30a46c,#f5a623 70%,#e5484d); transition: width .06s linear; }
+  .meter.indet .meter-fill { width: 40% !important; background: repeating-linear-gradient(45deg,#2d7cf0,#2d7cf0 8px,#2d7cf055 8px,#2d7cf055 16px); animation: slide 1s linear infinite; }
+  @keyframes slide { from { transform: translateX(-60%); } to { transform: translateX(260%); } }
+  .path { font: inherit; width: 26rem; max-width: 100%; padding: .3rem .4rem; border-radius: 6px; border: 1px solid #8888; background: transparent; }
+  .muted { opacity: .65; }
+  .dev { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px dashed #8886; }
+  .dev input { font: inherit; padding: .4rem; width: 60%; border-radius: 6px; border: 1px solid #8888; background: transparent; }
+</style>
+</head>
+<body>
+<h1>aispeech <small>local voice hub</small><span class="spacer"></span><button class="gear" id="gear" aria-expanded="false">⚙ Settings</button></h1>
+
+<div class="banner err" id="disconnected" hidden role="alert">⚠ Disconnected from aispeech — the app may have stopped. Displayed state is stale.</div>
+
+<div class="banner warn" id="voicewarn" hidden role="alert">
+  <span id="voicewarntext"></span>
+  <button id="voicewarnbtn">Set up voice models</button>
+</div>
+
+<!-- Pending pairings -->
+<div id="pending"></div>
+
+<!-- PTT + sessions: primary -->
+<div class="ptt">
+  <span id="mic" class="mic" role="status" aria-live="polite">Mic off</span>
+  <button class="primary big" id="ptt">Start listening</button>
+  <label style="margin-left:.5rem"><input type="checkbox" id="constant"> constant listen</label>
+  <span class="cap">Space toggles listening. Mic is only on while listening.</span>
+</div>
+
+<h2>Sessions</h2>
+<p class="hint">A session's <strong>name is its wake word</strong> — say it ("Claude, …") to route your speech there and switch focus. The starred row has focus.</p>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Session</th><th>Client</th><th>State</th><th>Focus</th><th><span class="sr-only">Actions</span></th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+</div>
+<p id="empty" class="muted">No agents connected yet. Start Claude Code with the aispeech MCP server and ask it to use voice.</p>
+
+<h2>Recognized speech</h2>
+<div class="transcripts" id="transcripts" role="log" aria-live="polite" aria-label="Recognized speech"><span class="muted">Nothing heard yet.</span></div>
+
+<div class="notices"><ul id="notices" role="log" aria-live="polite" aria-label="Activity"></ul></div>
+
+<div id="devbox" class="dev" hidden>
+  <strong class="muted">dev inject</strong> — simulate a transcribed utterance (routing test):
+  <div style="margin-top:.5rem"><input id="devtext" placeholder='e.g. "claude, run the tests"'> <button id="devsend">Inject</button></div>
+</div>
+
+<!-- Settings drawer -->
+<div class="settings" id="settings" hidden>
+  <h2>Connect AI agents</h2>
+  <p class="hint">Register this hub with your AI CLIs. Endpoint: <code id="mcpurl"></code></p>
+  <div class="tablewrap"><table><tbody id="agentrows"></tbody></table></div>
+  <p class="cap">After installing, restart the agent and tell it to use voice — it'll appear at the top with a pairing code.</p>
+
+  <h2>Audio devices &amp; levels</h2>
+  <div class="grid" id="audiogrid">
+    <label for="in">Microphone</label>
+    <select id="in"></select>
+    <label for="out">Speaker</label>
+    <select id="out"></select>
+    <label for="vol">Speaker volume</label>
+    <div><input type="range" id="vol" min="0" max="2" step="0.05"><span class="lvl" id="volv"></span></div>
+    <label for="gain">Mic gain</label>
+    <div><input type="range" id="gain" min="0" max="3" step="0.05"><span class="lvl" id="gainv"></span></div>
+    <label>Test</label>
+    <div class="testrow">
+      <button id="testspk">Test speaker</button>
+      <button id="testmic">Test mic</button>
+      <div class="meter" id="meter" hidden role="progressbar" aria-label="Mic level" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="meter-fill" id="meterfill"></div></div>
+    </div>
+  </div>
+  <p id="noaudio" class="muted" hidden>No audio backend available on this host.</p>
+
+  <h2>Interaction</h2>
+  <div class="grid">
+    <label for="ptttimeout">PTT timeout</label>
+    <div><input type="number" id="ptttimeout" min="0.25" step="0.25" style="width:5rem"> minutes
+      <span class="cap">— after pressing Start listening, the mic stays hot while you keep talking, and turns off after this much silence.</span></div>
+  </div>
+
+  <h2>Models</h2>
+  <div class="grid">
+    <label for="wselect">Speech&#8209;to&#8209;text</label>
+    <div><select id="wselect"></select> <span class="pill" id="sttpill"></span></div>
+    <label for="pselect">Text&#8209;to&#8209;speech</label>
+    <div><select id="pselect"></select> <span class="pill" id="ttspill"></span></div>
+    <label for="dlselect">Download</label>
+    <div class="testrow">
+      <select id="dlselect"></select>
+      <button id="dlbtn">Download</button>
+      <div class="meter" id="dlmeter" hidden role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="meter-fill" id="dlfill"></div></div>
+      <span class="lvl" id="dlstatus"></span>
+    </div>
+  </div>
+  <p id="modelnudge" class="cap" hidden>No speech model installed — pick one above and click Download.</p>
+  <p id="modelerr" class="muted" style="color:#e5484d"></p>
+
+  <details style="margin-top:.5rem">
+    <summary class="muted" style="cursor:pointer">Advanced — manual paths &amp; binaries</summary>
+    <div class="grid" style="margin-top:.6rem">
+      <label for="wmodel">Whisper model path</label><input id="wmodel" class="path">
+      <label for="pvoice">Piper voice path</label><input id="pvoice" class="path">
+      <label for="lang">Language</label><input id="lang" class="path" style="max-width:6rem">
+      <label for="wbin">whisper binary</label><input id="wbin" class="path" style="max-width:14rem">
+      <label for="pbin">piper binary</label><input id="pbin" class="path" style="max-width:14rem">
+      <label>Models directory</label><span id="mdir" class="muted"></span>
+    </div>
+    <button id="savemodels" style="margin-top:.6rem">Save advanced</button>
+  </details>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const base = (p) => String(p).split('/').pop();
+const mb = (n) => (n / 1048576).toFixed(0) + ' MB';
+
+async function post(path, body) {
+  await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  refresh();
+}
+
+// --- settings drawer (remembers open/closed) ---
+function setDrawer(open) {
+  $('settings').hidden = !open;
+  $('gear').setAttribute('aria-expanded', String(open));
+  localStorage.setItem('aispeech.settings', open ? '1' : '0');
+  if (open) { refreshAudio(); refreshModels(); refreshInstall(); refreshInteraction(); }
+}
+$('gear').onclick = () => setDrawer($('settings').hidden);
+$('voicewarnbtn').onclick = () => { setDrawer(true); $('settings').scrollIntoView({ behavior: 'smooth' }); };
+
+// --- PTT ---
+let micHot = false;
+$('ptt').onclick = () => post(micHot ? '/api/ptt/stop' : '/api/ptt/start');
+$('constant').onchange = (e) => post('/api/listen/constant', { on: e.target.checked });
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.repeat) return;
+  const t = e.target.tagName;
+  if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || t === 'BUTTON' || t === 'SUMMARY') return;
+  e.preventDefault();
+  if (!$('ptt').disabled) $('ptt').click();
+});
+$('devsend').onclick = () => { const t = $('devtext').value.trim(); if (t) { post('/api/dev/inject', { text: t }); $('devtext').value = ''; } };
+$('devtext').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('devsend').click(); });
+
+// --- audio ---
+async function postAudio(u) { await fetch('/api/audio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(u) }); }
+$('in').onchange = (e) => postAudio({ input_device: e.target.value });
+$('out').onchange = (e) => postAudio({ output_device: e.target.value });
+$('vol').oninput = (e) => { $('volv').textContent = fmtPct(e.target.value); };
+$('vol').onchange = (e) => postAudio({ volume: parseFloat(e.target.value) });
+$('gain').oninput = (e) => { $('gainv').textContent = fmtPct(e.target.value); };
+$('gain').onchange = (e) => postAudio({ gain: parseFloat(e.target.value) });
+const fmtPct = (v) => Math.round(parseFloat(v) * 100) + '%';
+
+$('testspk').onclick = () => fetch('/api/audio/test-speaker', { method: 'POST' });
+let micTimer = null;
+$('testmic').onclick = async () => {
+  if (micTimer) { await stopMicTest(); return; }
+  await fetch('/api/mic-test/start', { method: 'POST' });
+  $('testmic').textContent = 'Stop test'; $('testmic').classList.add('active'); $('meter').hidden = false;
+  micTimer = setInterval(pollMicLevel, 90);
+};
+async function stopMicTest() {
+  clearInterval(micTimer); micTimer = null;
+  await fetch('/api/mic-test/stop', { method: 'POST' });
+  $('testmic').textContent = 'Test mic'; $('testmic').classList.remove('active'); $('meter').hidden = true; $('meterfill').style.width = '0%';
+}
+async function pollMicLevel() {
+  try {
+    const r = await (await fetch('/api/mic-test/level')).json();
+    if (!r.active) { await stopMicTest(); return; }
+    const pct = Math.min(100, Math.round(r.level * 300));
+    $('meterfill').style.width = pct + '%'; $('meter').setAttribute('aria-valuenow', pct);
+  } catch (e) {}
+}
+window.addEventListener('beforeunload', () => { if (micTimer) navigator.sendBeacon('/api/mic-test/stop'); });
+
+function fillSelect(sel, names, current) {
+  if (document.activeElement === sel) return;
+  const opts = ['<option value="">System default</option>'].concat(names.map(n => `<option ${n === current ? 'selected' : ''}>${esc(n)}</option>`));
+  sel.innerHTML = opts.join('');
+  if (current && !names.includes(current)) sel.value = '';
+}
+async function refreshAudio() {
+  if ($('settings').hidden) return;
+  const a = await (await fetch('/api/audio')).json();
+  $('noaudio').hidden = a.available;
+  $('audiogrid').style.display = a.available ? '' : 'none';
+  fillSelect($('in'), a.input || [], a.input_device);
+  fillSelect($('out'), a.output || [], a.output_device);
+  if (document.activeElement !== $('vol')) { $('vol').value = a.volume; $('volv').textContent = fmtPct(a.volume); }
+  if (document.activeElement !== $('gain')) { $('gain').value = a.gain; $('gainv').textContent = fmtPct(a.gain); }
+}
+
+// --- models ---
+async function postModels(body) { renderModels(await (await fetch('/api/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()); }
+$('wselect').onchange = (e) => postModels({ whisper_model: e.target.value });
+$('pselect').onchange = (e) => postModels({ piper_voice: e.target.value });
+$('savemodels').onclick = () => postModels({
+  whisper_model: $('wmodel').value.trim(), piper_voice: $('pvoice').value.trim(),
+  language: $('lang').value.trim(), whisper_bin: $('wbin').value.trim(), piper_bin: $('pbin').value.trim()
+});
+
+let dlTimer = null;
+$('dlbtn').onclick = async () => {
+  const id = $('dlselect').value; if (!id) return;
+  const r = await fetch('/api/models/download', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+  if (!r.ok) { $('dlstatus').textContent = await r.text(); return; }
+  startDlPoll();
+};
+function startDlPoll() { if (dlTimer) return; $('dlmeter').hidden = false; $('dlbtn').disabled = true; dlTimer = setInterval(pollDownload, 500); }
+async function pollDownload() {
+  try {
+    const d = await (await fetch('/api/models/download')).json();
+    renderDownload(d);
+    if (!d.active) { clearInterval(dlTimer); dlTimer = null; $('dlbtn').disabled = false; refreshModels(); }
+  } catch (e) {}
+}
+function renderDownload(d) {
+  const meter = $('dlmeter');
+  if (d.active) {
+    meter.hidden = false;
+    if (d.total > 0) {
+      const pct = Math.round(d.received / d.total * 100);
+      meter.classList.remove('indet'); $('dlfill').style.width = pct + '%'; meter.setAttribute('aria-valuenow', pct);
+      $('dlstatus').textContent = `${d.name} — ${pct}% (${mb(d.received)}/${mb(d.total)})`;
+    } else {
+      meter.classList.add('indet');
+      $('dlstatus').textContent = `${d.name} — ${mb(d.received)}…`;
+    }
+  } else {
+    meter.hidden = true; meter.classList.remove('indet'); $('dlfill').style.width = '0%';
+    $('dlstatus').textContent = d.error ? ('error: ' + d.error) : (d.done ? 'done' : '');
+  }
+}
+
+function setPill(el, ok, on, off) { el.textContent = ok ? on : off; el.classList.toggle('on', ok); el.classList.toggle('off', !ok); }
+function optList(paths, current) {
+  const opts = ['<option value="">— none —</option>']; let has = false;
+  for (const p of paths) { const sel = p === current; if (sel) has = true; opts.push(`<option value="${esc(p)}" ${sel ? 'selected' : ''}>${esc(base(p))}</option>`); }
+  if (current && !has) opts.push(`<option value="${esc(current)}" selected>${esc(base(current))} (custom)</option>`);
+  return opts.join('');
+}
+function renderModels(m) {
+  if (document.activeElement !== $('wselect')) $('wselect').innerHTML = optList(m.installed_whisper || [], m.whisper_model || '');
+  if (document.activeElement !== $('pselect')) $('pselect').innerHTML = optList(m.installed_piper || [], m.piper_voice || '');
+  if (document.activeElement !== $('dlselect')) {
+    const stt = [], tts = [];
+    for (const c of (m.catalog || [])) {
+      const o = `<option value="${c.id}">${esc(c.name)} · ${esc(c.size)}${c.installed ? ' ✓' : ''}</option>`;
+      (c.kind === 'whisper' ? stt : tts).push(o);
+    }
+    $('dlselect').innerHTML = `<optgroup label="Speech-to-text">${stt.join('')}</optgroup><optgroup label="Text-to-speech">${tts.join('')}</optgroup>`;
+  }
+  setPill($('sttpill'), m.stt_ready, 'STT ready', 'STT off');
+  setPill($('ttspill'), m.tts_ready, 'TTS ready', 'TTS off');
+  $('modelnudge').hidden = m.stt_ready || (m.installed_whisper || []).length > 0;
+  if (document.activeElement !== $('wmodel')) $('wmodel').value = m.whisper_model || '';
+  if (document.activeElement !== $('pvoice')) $('pvoice').value = m.piper_voice || '';
+  if (document.activeElement !== $('lang')) $('lang').value = m.language || '';
+  if (document.activeElement !== $('wbin')) $('wbin').value = m.whisper_bin || '';
+  if (document.activeElement !== $('pbin')) $('pbin').value = m.piper_bin || '';
+  $('mdir').textContent = m.models_dir || '';
+  const errs = [];
+  if (!m.whisper_bin_ok) errs.push(`whisper binary "${m.whisper_bin}" not on PATH`); else if (m.whisper_error) errs.push(m.whisper_error);
+  if (!m.has_audio) errs.push('no audio output for TTS'); else if (!m.piper_bin_ok) errs.push(`piper binary "${m.piper_bin}" not on PATH`); else if (m.piper_error) errs.push(m.piper_error);
+  $('modelerr').textContent = errs.join(' · ');
+  if (m.download && m.download.active) startDlPoll();
+}
+async function refreshModels() { if ($('settings').hidden) return; try { renderModels(await (await fetch('/api/models')).json()); } catch (e) {} }
+
+// --- connect AI agents ---
+async function refreshInstall() {
+  if ($('settings').hidden) return;
+  try {
+    const d = await (await fetch('/api/install')).json();
+    $('mcpurl').textContent = d.url;
+    $('agentrows').innerHTML = (d.agents || []).map(a => {
+      let status, action = '';
+      if (!a.detected) status = '<span class="muted">not found</span>';
+      else if (a.installed) { status = '<span class="pill on">installed</span>'; action = `<button data-agent="${a.id}" data-action="uninstall">Remove</button>`; }
+      else { status = '<span class="pill">available</span>'; action = `<button class="primary" data-agent="${a.id}" data-action="install">Install</button>`; }
+      const note = a.note ? ` <span class="cap">(${esc(a.note)})</span>` : '';
+      return `<tr><td><strong>${esc(a.name)}</strong>${note}</td><td>${status}</td><td>${action}</td></tr>`;
+    }).join('');
+    $('agentrows').querySelectorAll('[data-agent]').forEach(b => b.onclick = async () => {
+      b.disabled = true; b.textContent = '…';
+      await fetch('/api/install', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ agent: b.dataset.agent, action: b.dataset.action }) });
+      refreshInstall();
+    });
+  } catch (e) {}
+}
+
+// --- interaction (PTT timeout) ---
+$('ptttimeout').onchange = (e) => {
+  const m = parseFloat(e.target.value); if (!(m > 0)) return;
+  fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_minutes: m }) });
+};
+async function refreshInteraction() {
+  if ($('settings').hidden) return;
+  try {
+    const d = await (await fetch('/api/interaction')).json();
+    if (document.activeElement !== $('ptttimeout')) $('ptttimeout').value = d.dialog_timeout_minutes;
+  } catch (e) {}
+}
+
+// --- favicon / mic-hot ---
+function setFav(hot) {
+  const color = hot ? '%23e5484d' : '%23888';
+  $('fav').href = `data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='6' fill='${color}'/></svg>`;
+}
+const MIC_LABELS = { idle: 'Mic off', dialog: 'Listening — push to talk', constant: 'Listening — constant' };
+const TAG_LABELS = { delivered: 'delivered', dropped: 'dropped · not listening', 'no-session': 'no session in focus', focus: 'focus' };
+const TAG_TIPS = { delivered: 'Routed to the focused session', dropped: 'Target session had no pending listen() call', 'no-session': 'No session is in focus', focus: 'Focus switched by wake word' };
+
+// --- append-only transcript & notice rendering (preserves selection + SR) ---
+const seenTx = new Set(), seenNo = new Set();
+function appendTranscripts(list) {
+  const c = $('transcripts');
+  const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 40;
+  let added = false;
+  for (const t of list) {
+    if (seenTx.has(t.at)) continue;
+    seenTx.add(t.at); added = true;
+    const ph = c.querySelector('.muted'); if (ph) ph.remove();
+    const div = document.createElement('div'); div.className = 'tr';
+    const to = t.target ? ' → ' + t.target : '';
+    div.innerHTML = `<span class="t">${new Date(t.at).toLocaleTimeString()}</span><span class="txt">${esc(t.text)}</span>` +
+      `<span class="tag ${t.outcome}" title="${esc(TAG_TIPS[t.outcome] || '')}">${esc(TAG_LABELS[t.outcome] || t.outcome)}${esc(to)}</span>`;
+    c.appendChild(div);
+  }
+  while (c.children.length > 150) c.removeChild(c.firstChild);
+  if (added && atBottom) c.scrollTop = c.scrollHeight;
+}
+function appendNotices(list) {
+  const c = $('notices');
+  for (const n of list) {
+    const key = n.at + '|' + n.text;
+    if (seenNo.has(key)) continue;
+    seenNo.add(key);
+    const li = document.createElement('li'); li.className = n.kind;
+    li.textContent = `${new Date(n.at).toLocaleTimeString()}  ${n.text}`;
+    c.appendChild(li);
+  }
+  while (c.children.length > 40) c.removeChild(c.firstChild);
+}
+
+// --- pending pairings ---
+function renderPending(pending) {
+  const c = $('pending');
+  c.innerHTML = pending.map(s => `
+    <div class="pending">
+      <span>🔗 <span class="who">${esc(s.client_name)}</span> wants to connect. Read this pairing code to it (or tell it to call <code>pair</code>):</span>
+      <span class="code">${esc(s.pairing_code)}</span>
+      <button data-copy="${esc(s.pairing_code)}">Copy</button>
+      <button data-revoke="${s.id}">Dismiss</button>
+    </div>`).join('');
+  c.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied ✓'; setTimeout(() => b.textContent = 'Copy', 1200); } catch (e) {}
+  });
+  c.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => post('/api/session/revoke', { id: b.dataset.revoke }));
+}
+
+// --- main state ---
+function render(state) {
+  micHot = state.mic_mode !== 'idle';
+  const mic = $('mic');
+  mic.textContent = MIC_LABELS[state.mic_mode] || state.mic_mode;
+  mic.classList.toggle('hot', micHot); mic.classList.remove('stale');
+  document.body.classList.toggle('listening', micHot);
+  setFav(micHot);
+  document.title = micHot ? '🔴 aispeech — listening' : 'aispeech';
+  $('ptt').textContent = micHot ? 'Stop listening' : 'Start listening';
+  $('ptt').classList.toggle('active', micHot);
+  $('constant').checked = state.mic_mode === 'constant';
+  $('devbox').hidden = !state.dev_inject;
+
+  // voice-not-ready warning + PTT gating
+  if (!state.stt_ready) {
+    $('voicewarn').hidden = false;
+    $('voicewarntext').textContent = 'Speech-to-text isn’t ready, so listening won’t transcribe anything.';
+    $('ptt').disabled = true; $('ptt').title = 'Install a speech-to-text model first (Settings)';
+  } else {
+    $('voicewarn').hidden = true; $('ptt').disabled = false; $('ptt').title = '';
+  }
+  $('gear').classList.toggle('attn', !state.stt_ready || !state.tts_ready);
+
+  const pending = state.sessions.filter(s => !s.paired);
+  const paired = state.sessions.filter(s => s.paired);
+  renderPending(pending);
+  appendTranscripts(state.transcripts || []);
+  appendNotices(state.notices || []);
+
+  const rows = $('rows'); rows.innerHTML = ''; $('empty').hidden = state.sessions.length > 0;
+  for (const s of paired) {
+    const tr = document.createElement('tr');
+    if (s.focused) tr.classList.add('focus');
+    const stateCell = `<span class="pill ${s.listening ? 'on' : ''}">${s.listening ? 'listening' : 'idle'}</span>`;
+    const focusCell = s.focused ? '<span class="star" aria-label="Focused session" title="Focused">★</span>' : `<button data-focus="${s.id}">focus</button>`;
+    tr.innerHTML = `
+      <td><input class="name-in" value="${esc(s.name)}" data-rename="${s.id}" aria-label="Session name (wake word)"></td>
+      <td class="muted">${esc(s.client_name)}</td>
+      <td>${stateCell}</td>
+      <td>${focusCell}</td>
+      <td><button data-revoke="${s.id}">revoke</button></td>`;
+    rows.appendChild(tr);
+  }
+  rows.querySelectorAll('[data-focus]').forEach(b => b.onclick = () => post('/api/session/focus', { id: b.dataset.focus }));
+  rows.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => post('/api/session/revoke', { id: b.dataset.revoke }));
+  rows.querySelectorAll('[data-rename]').forEach(inp => inp.onchange = () => post('/api/session/rename', { id: inp.dataset.rename, name: inp.value }));
+}
+
+// --- connection tracking ---
+let failures = 0;
+function setConnected(ok) {
+  $('disconnected').hidden = ok;
+  if (!ok) $('mic').classList.add('stale');
+}
+async function refresh() {
+  try {
+    const r = await fetch('/api/state'); if (!r.ok) throw new Error('bad status');
+    failures = 0; setConnected(true); render(await r.json());
+  } catch (e) { if (++failures >= 2) setConnected(false); }
+}
+
+if (localStorage.getItem('aispeech.settings') === '1') setDrawer(true);
+refresh();
+setInterval(refresh, 600);
+setInterval(refreshAudio, 3000);
+setInterval(refreshModels, 3000);
+// install status is refreshed on drawer-open and after actions (it shells out
+// to `claude mcp get`, so we don't poll it on a timer).
+</script>
+</body>
+</html>
