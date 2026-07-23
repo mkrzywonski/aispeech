@@ -165,7 +165,8 @@
 <h2>Recognized speech</h2>
 <div class="transcripts" id="transcripts" role="log" aria-live="polite" aria-label="Recognized speech"><span class="muted">Nothing heard yet.</span></div>
 
-<div class="notices"><ul id="notices" role="log" aria-live="polite" aria-label="Activity"></ul></div>
+<h2>Activity</h2>
+<div class="notices"><ul id="notices" role="log" aria-live="polite" aria-label="Activity"><li class="muted">Session connections and pairing events appear here.</li></ul></div>
 
 <div id="devbox" class="dev" hidden>
   <strong class="muted">dev inject</strong> — simulate a transcribed utterance (routing test):
@@ -487,6 +488,7 @@ function appendNotices(list) {
     const key = n.at + '|' + n.text;
     if (seenNo.has(key)) continue;
     seenNo.add(key);
+    const ph = c.querySelector('.muted'); if (ph) ph.remove();
     const li = document.createElement('li'); li.className = n.kind;
     li.textContent = `${new Date(n.at).toLocaleTimeString()}  ${n.text}`;
     c.appendChild(li);

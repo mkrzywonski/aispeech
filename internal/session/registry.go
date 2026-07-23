@@ -187,8 +187,10 @@ func (r *Registry) Listen(ctx context.Context, id string, timeout time.Duration)
 
 // Deliver routes an already-transcribed utterance. It resolves a leading
 // session-word (switching focus), then delivers the remainder to the focused
-// session — or drops it with a UI notice if there is no focus or the target is
-// not currently listening (no buffering, by design).
+// session — or drops it if there is no focus or the target is not currently
+// listening (no buffering, by design). Each utterance and its outcome are
+// recorded as a transcript for the UI; routing is not duplicated into the
+// activity log.
 func (r *Registry) Deliver(text string) {
 	heard := strings.TrimSpace(text)
 	if heard == "" {
@@ -203,7 +205,6 @@ func (r *Registry) Deliver(text string) {
 	if id, rest, ok := r.matchLeadingNameLocked(heard); ok {
 		r.focusID = id
 		s := r.byID[id]
-		r.noticeLocked("info", fmt.Sprintf("focus → %s", s.Name))
 		if strings.TrimSpace(rest) == "" {
 			r.transcriptLocked(heard, s.Name, "focus") // focus switch only
 			return
@@ -213,18 +214,15 @@ func (r *Registry) Deliver(text string) {
 
 	focus := r.byID[r.focusID]
 	if focus == nil {
-		r.noticeLocked("warn", "no session selected")
 		r.transcriptLocked(heard, "", "no-session")
 		return
 	}
 	if focus.listen == nil {
-		r.noticeLocked("warn", fmt.Sprintf("%s isn't listening", focus.Name))
 		r.transcriptLocked(heard, focus.Name, "dropped")
 		return
 	}
 	focus.listen <- Utterance{Text: command, Target: focus.Name}
 	focus.listen = nil
-	r.noticeLocked("info", fmt.Sprintf("%s ◀ %q", focus.Name, truncate(command, 60)))
 	r.transcriptLocked(heard, focus.Name, "delivered")
 }
 
@@ -417,11 +415,4 @@ func (r *Registry) transcriptLocked(text, target, outcome string) {
 	if len(r.transcripts) > maxTranscripts {
 		r.transcripts = r.transcripts[len(r.transcripts)-maxTranscripts:]
 	}
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

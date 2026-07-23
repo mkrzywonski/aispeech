@@ -64,12 +64,15 @@ func TestBareNameSwitchesFocusOnly(t *testing.T) {
 
 func TestDropWhenNotListening(t *testing.T) {
 	r := New()
-	pair(t, r, "id1", "claude") // focused, but never calls listen()
-	r.Deliver("do something")   // no outstanding listen -> dropped + notice
-	_, notices, _ := r.Snapshot()
-	last := notices[len(notices)-1]
-	if last.Kind != "warn" || last.Text != "claude isn't listening" {
-		t.Fatalf("want not-listening warn, got %+v", last)
+	pair(t, r, "id1", "claude")   // focused, but never calls listen()
+	r.Deliver("do something")     // no outstanding listen -> dropped (transcript only)
+	_, _, transcripts := r.Snapshot()
+	if len(transcripts) == 0 {
+		t.Fatal("no transcript recorded")
+	}
+	last := transcripts[len(transcripts)-1]
+	if last.Outcome != "dropped" || last.Target != "claude" || last.Text != "do something" {
+		t.Fatalf("want dropped transcript, got %+v", last)
 	}
 }
 
