@@ -65,6 +65,8 @@
   .pill { font-size: .72rem; padding: .1rem .5rem; border-radius: 999px; border: 1px solid #8888; }
   .pill.on { background: #30a46c; color: #fff; border-color: #30a46c; }
   .pill.off { background: #e5484d; color: #fff; border-color: #e5484d; }
+  .pill.warn { background: #f5a623; color: #111; border-color: #f5a623; }
+  #listenhint:not([hidden]) { color: #f5a623; margin: .2rem 0 0; }
   .star { color: #2d7cf0; }
 
   .transcripts { border: 1px solid #8884; border-radius: 8px; padding: .5rem .7rem; max-height: 260px; overflow-y: auto; background: #8880; }
@@ -126,8 +128,9 @@
       <g class="slash" stroke="#e5484d"><circle cx="12" cy="12" r="11" fill="none"></circle><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"></line></g>
     </svg>
   </button>
+  <span id="ailisten" class="pill" title="Whether the focused agent is waiting for voice via its listen() tool"></span>
   <label class="idle">Stop listening after <input type="number" id="idlemin" min="1" step="1"> minutes idle</label>
-  <span class="cap">Click the mic or press Space to toggle listening.</span>
+  <span class="cap">Click the mic or press Space to toggle the microphone.</span>
   </div>
   <div class="ptt-row">
   <button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">
@@ -141,6 +144,7 @@
   <input type="range" id="vol" min="0" max="2" step="0.05" title="Speaker volume"><span class="lvl" id="volv"></span>
   <button id="pausebtn" class="iconbtn" aria-label="Pause speaking" title="Pause speaking"></button>
   </div>
+  <p id="listenhint" class="cap" role="status" hidden></p>
 </div>
 
 <h2>Sessions</h2>
@@ -517,6 +521,25 @@ function render(state) {
   document.title = micHot ? '🔴 aispeech — listening' : 'aispeech';
   if (document.activeElement !== $('idlemin')) $('idlemin').value = state.dialog_timeout_minutes;
   $('devbox').hidden = !state.dev_inject;
+
+  // Agent-listening status: distinct from mic-on. The mic can be hot while the
+  // focused agent is busy (not waiting on listen()), in which case speech drops.
+  const focused = state.sessions.find(s => s.focused && s.paired);
+  const al = $('ailisten');
+  if (!focused) { al.textContent = 'no agent in focus'; al.className = 'pill'; }
+  else if (focused.listening) { al.textContent = focused.name + ': waiting for you'; al.className = 'pill on'; }
+  else { al.textContent = focused.name + ': not listening'; al.className = 'pill warn'; }
+
+  const hint = $('listenhint');
+  if (micHot && focused && !focused.listening) {
+    hint.hidden = false;
+    hint.textContent = `Mic is on, but ${focused.name} isn't waiting for voice — ask it to listen in its terminal, or wait for it to finish its turn and call listen() again.`;
+  } else if (micHot && !focused) {
+    hint.hidden = false;
+    hint.textContent = 'Mic is on, but no paired agent is in focus — pair an agent to receive your speech.';
+  } else {
+    hint.hidden = true;
+  }
 
   // voice-not-ready warning + mic gating
   if (!state.stt_ready) {
