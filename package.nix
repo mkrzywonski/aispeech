@@ -35,7 +35,7 @@ buildGoModule {
   meta = with lib; {
     description = "Local voice hub: gives terminal AI agents speak() and listen() over MCP";
     homepage = "https://github.com/mkrzywonski/aispeech";
-    license = licenses.mit;
+    license = licenses.gpl3Only;
     platforms = platforms.linux;
     mainProgram = "aispeech";
   };

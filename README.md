@@ -176,4 +176,4 @@ terminal. Same "extend the TUI, don't replace it" philosophy.
 
 ## License
 
-MIT.
+GPL-3.0-only. See [LICENSE](LICENSE).
