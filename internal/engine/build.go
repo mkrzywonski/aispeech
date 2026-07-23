@@ -49,5 +49,6 @@ func Build(reg *session.Registry, o BuildOptions) (svc *Service, devices *AudioC
 	}
 
 	svc = New(reg, rec, stt, tts, o.DialogTimeout, o.SpeakCap)
+	svc.SetSounds(ac)
 	return svc, ac, cleanup, warnings
 }

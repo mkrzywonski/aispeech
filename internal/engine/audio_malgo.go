@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
+	"path/filepath"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -240,7 +241,38 @@ func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
 
 // TestSpeaker plays a short chime through the selected output at current volume.
 func (a *AudioContext) TestSpeaker() error {
-	return a.Play(testTone(44100), 44100)
+	_, err := a.PlaySound(context.Background(), "chime", "")
+	return err
+}
+
+// PlaySound plays a built-in named sound or a WAV file through the selected
+// output (respecting volume/mute), returning a label for what was played.
+func (a *AudioContext) PlaySound(_ context.Context, name, file string) (string, error) {
+	var (
+		pcm   []float32
+		rate  int
+		label string
+	)
+	switch {
+	case file != "":
+		p, sr, err := readWAVFile(file)
+		if err != nil {
+			return "", fmt.Errorf("play file: %w", err)
+		}
+		pcm, rate, label = p, sr, filepath.Base(file)
+	case name != "":
+		p, sr, ok := generateSound(name)
+		if !ok {
+			return "", fmt.Errorf("unknown sound %q (have: %v)", name, SoundNames())
+		}
+		pcm, rate, label = p, sr, name
+	default:
+		return "", fmt.Errorf("provide a sound name or a WAV file path")
+	}
+	if err := a.Play(pcm, rate); err != nil {
+		return "", err
+	}
+	return label, nil
 }
 
 // StartMicTest opens the selected input and reports a live level via MicLevel.
@@ -306,30 +338,6 @@ func (a *AudioContext) MicTestActive() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.micDev != nil
-}
-
-// testTone builds a short two-note chime with fade envelopes (no clicks).
-func testTone(sampleRate int) []float32 {
-	notes := []struct {
-		freq float64
-		dur  float64
-	}{{660, 0.18}, {880, 0.28}}
-	const amp = 0.3
-	var out []float32
-	for _, nt := range notes {
-		n := int(float64(sampleRate) * nt.dur)
-		fade := int(0.008 * float64(sampleRate))
-		for i := 0; i < n; i++ {
-			env := 1.0
-			if i < fade {
-				env = float64(i) / float64(fade)
-			} else if i > n-fade {
-				env = float64(n-i) / float64(fade)
-			}
-			out = append(out, float32(amp*env*math.Sin(2*math.Pi*nt.freq*float64(i)/float64(sampleRate))))
-		}
-	}
-	return out
 }
 
 // MalgoRecorder captures the microphone and emits endpointed utterance segments.

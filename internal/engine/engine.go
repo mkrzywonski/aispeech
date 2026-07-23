@@ -45,6 +45,12 @@ type Speaker interface {
 	Speak(ctx context.Context, text string) error
 }
 
+// SoundPlayer plays a built-in named sound or a WAV file (satisfied by
+// *AudioContext).
+type SoundPlayer interface {
+	PlaySound(ctx context.Context, name, file string) (string, error)
+}
+
 // ListenMode describes the microphone lifecycle.
 type ListenMode int
 
@@ -74,6 +80,7 @@ type Service struct {
 	engMu sync.RWMutex // guards stt/tts (hot-swappable at runtime)
 	stt   Transcriber
 	tts   Speaker
+	sound SoundPlayer // nil when no audio backend
 
 	// speakQ serializes synthesis and playback. A single audio output cannot
 	// safely play two agent replies at once; channel order is the FIFO order in
@@ -164,6 +171,24 @@ func (s *Service) SetSpeaker(sp Speaker) {
 	s.engMu.Lock()
 	s.tts = sp
 	s.engMu.Unlock()
+}
+
+// SetSounds installs the sound player (called once at startup when audio exists).
+func (s *Service) SetSounds(p SoundPlayer) {
+	s.engMu.Lock()
+	s.sound = p
+	s.engMu.Unlock()
+}
+
+// PlaySound plays a built-in sound or a WAV file, returning a label for it.
+func (s *Service) PlaySound(ctx context.Context, name, file string) (string, error) {
+	s.engMu.RLock()
+	p := s.sound
+	s.engMu.RUnlock()
+	if p == nil {
+		return "", ErrUnavailable
+	}
+	return p.PlaySound(ctx, name, file)
 }
 
 func (s *Service) transcriber() Transcriber {

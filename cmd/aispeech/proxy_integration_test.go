@@ -57,7 +57,7 @@ func TestProxyBridge(t *testing.T) {
 		}
 		names[tool.Name] = true
 	}
-	for _, want := range []string{"pair", "converse", "listen", "speak", "status", "end_session"} {
+	for _, want := range []string{"pair", "converse", "listen", "speak", "play_sound", "status", "end_session"} {
 		if !names[want] {
 			t.Fatalf("proxy did not mirror tool %q (got %v)", want, names)
 		}

@@ -182,6 +182,7 @@ before pairing return an error with guidance.
 | `converse` | `text: string`, `timeout_seconds?: int` | `{ status, text, session }` | **Speak-then-listen** in one call — speak `text`, then wait for the next command. The natural way to stay in a voice dialog; the server's `instructions` steer the model to call it before ending each turn. |
 | `listen` | `timeout_seconds?: int` | `{ status, text, session }` | **Long-poll.** Waits for an utterance routed to *this* focused session, or a `timeout`/`cancelled` status. Use when there's no spoken reply to give yet. |
 | `speak` | `text: string` | `{ ok, spoken_chars, truncated }` | Speak without waiting. FIFO-serialized to the selected output; returns after playback. Enforces the character cap. |
+| `play_sound` | `sound?: string`, `file?: string` | `{ ok, played }` | Play a notification sound: a built-in (`chime`, `success`, `error`, `alert`, `alarm`, `ding`) or a WAV file path. Respects volume/mute. |
 | `end_session` | — | `{ ok }` | Drops this voice channel; releases focus if held. The agent's escape hatch. |
 | `status` | — | `{ paired, name, focused, listening_mode, mic_active, other_sessions }` | Lets the agent reason about whether speaking/listening is currently useful. |
 

@@ -96,6 +96,14 @@ func (d *deps) build() *mcp.Server {
 	}, d.speak)
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name: "play_sound",
+		Description: "Play a short sound through the speaker for a notification — e.g. task done, " +
+			"needs attention, an alarm. Either a built-in sound (name = chime, success, error, " +
+			"alert, alarm, ding) or an absolute path to a WAV file. Respects the user's volume/mute. " +
+			"Use sparingly; for spoken words use speak/converse instead.",
+	}, d.playSound)
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name:        "end_session",
 		Description: "Drop this voice session. listen and speak stop working until you pair again.",
 	}, d.endSession)
@@ -247,6 +255,27 @@ func (d *deps) speak(ctx context.Context, req *mcp.CallToolRequest, in speakIn) 
 		return nil, speakOut{}, err
 	}
 	return nil, speakOut{OK: true, SpokenChars: n, Truncated: trunc}, nil
+}
+
+type playSoundIn struct {
+	Sound string `json:"sound,omitempty" jsonschema:"a built-in sound: chime, success, error, alert, alarm, ding"`
+	File  string `json:"file,omitempty" jsonschema:"absolute path to a WAV file to play instead of a built-in sound"`
+}
+type playSoundOut struct {
+	OK     bool   `json:"ok"`
+	Played string `json:"played"`
+}
+
+func (d *deps) playSound(ctx context.Context, req *mcp.CallToolRequest, in playSoundIn) (*mcp.CallToolResult, playSoundOut, error) {
+	v := d.attach(req)
+	if !v.Paired {
+		return nil, playSoundOut{}, errUnpaired
+	}
+	played, err := d.svc.PlaySound(ctx, in.Sound, in.File)
+	if err != nil {
+		return nil, playSoundOut{}, err
+	}
+	return nil, playSoundOut{OK: true, Played: played}, nil
 }
 
 func (d *deps) endSession(ctx context.Context, req *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, okOut, error) {
