@@ -38,7 +38,8 @@
   .ptt-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
   .iconbtn { display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid #8888; border-radius: 7px; background: #8881; color: inherit; cursor: pointer; }
   .iconbtn.active { border-color: #e5484d; color: #e5484d; }
-  .mic { display: inline-flex; align-items: center; }
+  .mic { display: inline-flex; align-items: center; padding: 4px; border: none; background: none; color: inherit; cursor: pointer; border-radius: 8px; }
+  .mic:disabled { opacity: .4; cursor: not-allowed; }
   .mic svg { color: #888; }
   .mic.hot svg { color: #e5484d; }
   .mic .slash { display: inline; }
@@ -48,7 +49,7 @@
   @keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
   .ptt .big { font-size: 1.05rem; padding: .6rem 1.2rem; }
   .ptt .idle { opacity: .85; }
-  .ptt .idle input { font: inherit; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
+  .ptt .idle input { font: inherit; width: 3rem; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
   .volwrap { display: inline-flex; align-items: center; gap: .4rem; }
   .spk { padding: 2px; border: none; background: none; cursor: pointer; color: inherit; display: inline-flex; align-items: center; }
   .spk .slash { display: none; }
@@ -116,7 +117,7 @@
 <!-- PTT + sessions: primary -->
 <div class="ptt">
   <div class="ptt-row">
-  <span id="mic" class="mic" role="status" aria-live="polite" aria-label="Microphone off" title="Microphone off">
+  <button id="mic" class="mic" aria-pressed="false" aria-label="Start listening" title="Start listening">
     <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <rect x="9" y="3" width="6" height="10" rx="3" fill="currentColor" stroke="none"></rect>
       <path d="M6 11a6 6 0 0 0 12 0"></path>
@@ -124,10 +125,9 @@
       <line x1="8.5" y1="21" x2="15.5" y2="21"></line>
       <g class="slash" stroke="#e5484d"><circle cx="12" cy="12" r="11" fill="none"></circle><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"></line></g>
     </svg>
-  </span>
-  <button class="primary big" id="ptt">Start listening</button>
-  <label class="idle">Stop listening after <input type="number" id="idlemin" min="0.25" step="0.25"> minutes idle</label>
-  <span class="cap">Space toggles listening.</span>
+  </button>
+  <label class="idle">Stop listening after <input type="number" id="idlemin" min="1" step="1"> minutes idle</label>
+  <span class="cap">Click the mic or press Space to toggle listening.</span>
   </div>
   <div class="ptt-row">
   <button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">
@@ -241,7 +241,7 @@ $('voicewarnbtn').onclick = () => { setDrawer(true); $('settings').scrollIntoVie
 
 // --- PTT ---
 let micHot = false;
-$('ptt').onclick = () => post(micHot ? '/api/ptt/stop' : '/api/ptt/start');
+$('mic').onclick = () => post(micHot ? '/api/ptt/stop' : '/api/ptt/start');
 $('idlemin').onchange = (e) => {
   const m = parseFloat(e.target.value); if (!(m > 0)) return;
   fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_minutes: m }) });
@@ -251,7 +251,7 @@ document.addEventListener('keydown', (e) => {
   const t = e.target.tagName;
   if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || t === 'BUTTON' || t === 'SUMMARY') return;
   e.preventDefault();
-  if (!$('ptt').disabled) $('ptt').click();
+  if (!$('mic').disabled) $('mic').click();
 });
 $('devsend').onclick = () => { const t = $('devtext').value.trim(); if (t) { post('/api/dev/inject', { text: t }); $('devtext').value = ''; } };
 $('devtext').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('devsend').click(); });
@@ -494,23 +494,22 @@ function render(state) {
   micHot = state.mic_mode !== 'idle';
   const mic = $('mic');
   mic.classList.toggle('hot', micHot); mic.classList.remove('stale');
-  mic.setAttribute('aria-label', micHot ? 'Microphone on' : 'Microphone off');
-  mic.title = micHot ? 'Microphone on' : 'Microphone off';
+  mic.setAttribute('aria-pressed', String(micHot));
+  mic.setAttribute('aria-label', micHot ? 'Stop listening' : 'Start listening');
+  mic.title = micHot ? 'Listening — click to stop' : 'Start listening';
   document.body.classList.toggle('listening', micHot);
   setFav(micHot);
   document.title = micHot ? '🔴 aispeech — listening' : 'aispeech';
-  $('ptt').textContent = micHot ? 'Stop listening' : 'Start listening';
-  $('ptt').classList.toggle('active', micHot);
   if (document.activeElement !== $('idlemin')) $('idlemin').value = state.dialog_timeout_minutes;
   $('devbox').hidden = !state.dev_inject;
 
-  // voice-not-ready warning + PTT gating
+  // voice-not-ready warning + mic gating
   if (!state.stt_ready) {
     $('voicewarn').hidden = false;
     $('voicewarntext').textContent = 'Speech-to-text isn’t ready, so listening won’t transcribe anything.';
-    $('ptt').disabled = true; $('ptt').title = 'Install a speech-to-text model first (Settings)';
+    $('mic').disabled = true; $('mic').title = 'Install a speech-to-text model first (Settings)';
   } else {
-    $('voicewarn').hidden = true; $('ptt').disabled = false; $('ptt').title = '';
+    $('voicewarn').hidden = true; $('mic').disabled = false;
   }
   $('gear').classList.toggle('attn', !state.stt_ready || !state.tts_ready);
 
