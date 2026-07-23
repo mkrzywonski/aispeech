@@ -476,17 +476,32 @@ function appendNotices(list) {
 // --- pending pairings ---
 function renderPending(pending) {
   const c = $('pending');
-  c.innerHTML = pending.map(s => `
+  if (pending.length === 0) { c.innerHTML = ''; return; }
+  const names = pending.map(s => esc(s.client_name)).join(', ');
+  c.innerHTML = `
     <div class="pending">
-      <span>🔗 <span class="who">${esc(s.client_name)}</span> wants to connect. Read this pairing code to it (or tell it to call <code>pair</code>):</span>
-      <span class="code">${esc(s.pairing_code)}</span>
-      <button data-copy="${esc(s.pairing_code)}">Copy</button>
-      <button data-revoke="${s.id}">Dismiss</button>
-    </div>`).join('');
-  c.querySelectorAll('[data-copy]').forEach(b => b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = 'Copied ✓'; setTimeout(() => b.textContent = 'Copy', 1200); } catch (e) {}
-  });
+      <span>🔗 Waiting to pair: <span class="who">${names}</span>. Click <strong>Copy pairing token</strong>, then paste the token to the agent in its terminal.</span>
+      <button id="copytoken" class="primary">Copy pairing token</button>
+      <span class="lvl" id="tokenmsg"></span>
+      ${pending.map(s => `<button data-revoke="${s.id}">Dismiss ${esc(s.client_name)}</button>`).join('')}
+    </div>`;
+  $('copytoken').onclick = copyToken;
   c.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => post('/api/session/revoke', { id: b.dataset.revoke }));
+}
+async function copyToken() {
+  try {
+    const r = await fetch('/api/pair/token', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
+    if (!r.ok) { $('tokenmsg').textContent = 'could not create token'; return; }
+    const d = await r.json();
+    const mins = Math.round((d.expires_in_seconds || 300) / 60);
+    try {
+      await navigator.clipboard.writeText(d.token);
+      $('tokenmsg').textContent = `copied — paste to your agent (expires in ${mins} min)`;
+    } catch (e) {
+      // Clipboard blocked: reveal it for manual copy (still only in this browser).
+      $('tokenmsg').textContent = 'token: ' + d.token;
+    }
+  } catch (e) { $('tokenmsg').textContent = 'error creating token'; }
 }
 
 // --- main state ---

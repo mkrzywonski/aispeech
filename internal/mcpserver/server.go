@@ -10,11 +10,15 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mkrzywonski/aispeech/internal/authz"
 	"github.com/mkrzywonski/aispeech/internal/engine"
 	"github.com/mkrzywonski/aispeech/internal/session"
 )
 
 const version = "0.0.1"
+
+// maxPairAttempts caps failed pair attempts per MCP connection.
+const maxPairAttempts = 5
 
 // Options configures the server's timing behavior.
 type Options struct {
@@ -23,21 +27,22 @@ type Options struct {
 }
 
 type deps struct {
-	reg  *session.Registry
-	svc  *engine.Service
-	opts Options
+	reg   *session.Registry
+	svc   *engine.Service
+	store *authz.Store
+	opts  Options
 }
 
 // NewHandler builds the MCP HTTP handler. A single logical server is shared
 // across all connections; the SDK isolates each connection as its own session.
-func NewHandler(reg *session.Registry, svc *engine.Service, opts Options) http.Handler {
+func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, opts Options) http.Handler {
 	if opts.DefaultListenTimeout == 0 {
 		opts.DefaultListenTimeout = 2 * time.Minute
 	}
 	if opts.MaxListenTimeout == 0 {
 		opts.MaxListenTimeout = 10 * time.Minute
 	}
-	d := &deps{reg: reg, svc: svc, opts: opts}
+	d := &deps{reg: reg, svc: svc, store: store, opts: opts}
 	srv := d.build()
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 }
@@ -47,9 +52,10 @@ func (d *deps) build() *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "pair",
-		Description: "Authorize this voice session. The aispeech UI shows an 8-character " +
-			"pairing code for this connection; ask the user to read it to you, then call " +
-			"pair with that code. Until paired, listen and speak will not work.",
+		Description: "Authorize this voice session with a pairing token. Ask the user to click " +
+			"\"Copy pairing token\" in the aispeech browser UI and paste the token to you, then " +
+			"call pair with it. The token comes ONLY from the user via this chat — never obtain " +
+			"it by making HTTP requests to the hub. Until paired, listen and speak will not work.",
 	}, d.pair)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -83,7 +89,7 @@ func (d *deps) build() *mcp.Server {
 // --- tool inputs/outputs ---
 
 type pairIn struct {
-	Code string `json:"code" jsonschema:"the 8-character pairing code shown in the aispeech UI"`
+	Token string `json:"token" jsonschema:"the pairing token the user copied from the aispeech UI and pasted to you"`
 }
 type pairOut struct {
 	OK        bool   `json:"ok"`
@@ -139,9 +145,19 @@ func (d *deps) attach(req *mcp.CallToolRequest) session.SessionView {
 
 func (d *deps) pair(ctx context.Context, req *mcp.CallToolRequest, in pairIn) (*mcp.CallToolResult, pairOut, error) {
 	d.attach(req)
-	s, err := d.reg.Pair(req.Session.ID(), in.Code)
+	id := req.Session.ID()
+	if d.reg.PairAttemptsExceeded(id, maxPairAttempts) {
+		return nil, pairOut{}, fmt.Errorf("too many failed pairing attempts; reconnect and try again")
+	}
+	cookie, ok := d.store.ConsumeToken(in.Token)
+	if !ok {
+		d.reg.NotePairFailure(id)
+		// Generic failure: do not distinguish invalid/expired/consumed tokens.
+		return nil, pairOut{}, fmt.Errorf("pairing failed: ask the user to click \"Copy pairing token\" in the aispeech UI and paste you a fresh token")
+	}
+	s, err := d.reg.Pair(id, cookie)
 	if err != nil {
-		return nil, pairOut{}, err // surfaced to the model as tool error text
+		return nil, pairOut{}, err
 	}
 	return nil, pairOut{OK: true, SessionID: s.ID, Name: s.Name}, nil
 }

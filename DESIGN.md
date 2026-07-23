@@ -228,36 +228,45 @@ The MCP endpoint is localhost TCP (and must be reachable from WSL2). Risks:
   `listen()` channel.
 - A rogue process plays arbitrary audio via `speak()`.
 
-### Positive-authorization pairing (human → AI → hub)
+### Browser-bound pairing (browser → human → AI → hub)
 
-The pairing secret flows **from the human, through the AI's TUI, back to the
-hub** — which is precisely what proves the person driving the UI also controls
-the TUI in front of them.
+Superseding an earlier design in which the hub displayed an agent-generated
+pairing code in the world-readable `/api/state` (any local process — including a
+confused agent that `curl`s the hub — could read the code and self-pair). The
+current model makes the **browser UI a separate principal** and never exposes a
+pairing secret over a readable endpoint. See `BROWSER_PAIRING_PLAN.md` for the
+full design and threat-model limits.
 
-1. The agent connects and (via any tool) is told it is **unpaired**: *"Ask the
-   user to read you the pairing code shown in the aispeech UI, then call
-   `pair(code)`."* The hub creates a **pending** session and shows its code in
-   the UI, labeled with the MCP `clientInfo` name (e.g. `claude`).
-2. The user reads the code from the UI and tells the agent in its TUI.
-3. The agent calls `pair(code)`.
-4. On match, the hub authorizes the connection and issues a **memory-only bearer
-   token**. Only that connection, presenting the token, is the authorized
-   session.
+1. On first load, `GET /` issues an `HttpOnly`, `SameSite=Strict` browser-session
+   cookie. The agent connects over MCP and is told it is **unpaired**: *"Ask the
+   user to click 'Copy pairing token' in the aispeech UI and paste it to you."*
+2. The user clicks **Copy pairing token**; `POST /api/pair/token` (guarded by the
+   browser cookie + Origin) mints a single-use, 128-bit, 5-minute token, stored
+   server-side only as a hash and copied to the clipboard.
+3. The user pastes the token into the agent's TUI; the agent calls `pair(token)`.
+4. The hub atomically consumes the token and binds that MCP session to the
+   browser session that issued it. Only then do `listen`/`speak` work.
 
-A rogue client can call `pair()` but cannot make the user type the UI's code into
-*it*, so it is never authorized — it receives no audio and reaches no agent.
+Because the token is created only by an explicit action in a cookied, same-origin
+browser and is never returned by a readable endpoint, a **confused or malicious
+agent cannot obtain it by making HTTP requests** — it must be handed the token by
+the human. Failed `pair` attempts are rate-limited per connection.
 
-- Codes: 8-char base32, **short expiry**, **limited attempts** before
-  regeneration (brute-force resistance on localhost).
-- Tokens are memory-only; reconnects re-challenge (aish-style). Nothing persists
-  to disk.
+**Threat-model limit:** on a single-user host, a process with full user authority
+(reading the clipboard, keystrokes, or scripting the whole browser flow) can
+still pair — localhost offers no defense there. What this reliably stops is
+accidental agent self-pairing, cross-origin/DNS-rebinding web pages, and passive
+reads of a pairing secret.
 
 ### Additional controls
 
-- **Bind narrowly.** Localhost only on Linux/PowerShell. For WSL, prefer
-  **mirrored networking** so the bind stays `127.0.0.1`; otherwise bind to the
-  WSL adapter host IP only — **never `0.0.0.0`**. (See §8.) Network binding is
-  defense-in-depth; the pairing/token is the real gate.
+- **Host allowlist.** Every request whose `Host` isn't the loopback/bound
+  authority is rejected (`authz.HostGuard`) — the primary defense against DNS
+  rebinding. Mutating UI routes additionally require a same-origin `Origin` and a
+  known browser cookie.
+- **Bind narrowly.** Localhost by default; when a WSL-reachable bind is needed,
+  bind to that specific host — **never `0.0.0.0`**. Binding is defense-in-depth;
+  the Host/Origin allowlist and the pairing token are the real gates.
 - **`listen()` input originates only from the audio→STT pipeline.** There is **no
   unauthenticated "inject text" API** on the localhost surface — that would be
   the exact prompt-injection pipeline we refuse to build.

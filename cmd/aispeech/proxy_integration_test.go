@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mkrzywonski/aispeech/internal/authz"
 	"github.com/mkrzywonski/aispeech/internal/engine"
 	"github.com/mkrzywonski/aispeech/internal/mcpserver"
 	"github.com/mkrzywonski/aispeech/internal/session"
@@ -30,7 +31,8 @@ func TestProxyBridge(t *testing.T) {
 
 	reg := session.New()
 	svc := engine.New(reg, nil, nil, nil, time.Minute, 600)
-	ts := httptest.NewServer(mcpserver.NewHandler(reg, svc, mcpserver.Options{
+	store := authz.NewStore(time.Minute)
+	ts := httptest.NewServer(mcpserver.NewHandler(reg, svc, store, mcpserver.Options{
 		DefaultListenTimeout: 5 * time.Second, MaxListenTimeout: time.Minute,
 	}))
 	defer ts.Close()
@@ -67,14 +69,15 @@ func TestProxyBridge(t *testing.T) {
 	if len(views) != 1 || views[0].ClientName != "claude" {
 		t.Fatalf("hub session = %+v, want one named claude", views)
 	}
-	code := views[0].PairingCode
+	cookie := store.NewBrowser()
+	code, _ := store.IssueToken(cookie)
 
 	// Pair through the proxy.
 	var pr struct {
 		OK   bool   `json:"ok"`
 		Name string `json:"name"`
 	}
-	decode(t, call(t, ctx, cs, "pair", map[string]any{"code": code}), &pr)
+	decode(t, call(t, ctx, cs, "pair", map[string]any{"token": code}), &pr)
 	if !pr.OK {
 		t.Fatal("pair via proxy failed")
 	}

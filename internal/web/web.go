@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mkrzywonski/aispeech/internal/authz"
 	"github.com/mkrzywonski/aispeech/internal/config"
 	"github.com/mkrzywonski/aispeech/internal/engine"
 	"github.com/mkrzywonski/aispeech/internal/mcpinstall"
@@ -318,51 +319,87 @@ func (c *Controls) micLevel() (level float64, active bool) {
 	return c.audio.MicLevel(), c.audio.MicTestActive()
 }
 
+const cookieName = "aispeech_ui"
+
 // Server wires the UI and control API to the registry and engine service.
 type Server struct {
 	reg      *session.Registry
 	svc      *engine.Service
 	controls *Controls
+	store    *authz.Store
+	allowed  map[string]bool
 	devInj   bool
 }
 
 // New returns a web Server. devInject enables the dev-only transcript injection
 // endpoint used to exercise routing without a microphone.
-func New(reg *session.Registry, svc *engine.Service, controls *Controls, devInject bool) *Server {
-	return &Server{reg: reg, svc: svc, controls: controls, devInj: devInject}
+func New(reg *session.Registry, svc *engine.Service, controls *Controls, store *authz.Store, allowed map[string]bool, devInject bool) *Server {
+	return &Server{reg: reg, svc: svc, controls: controls, store: store, allowed: allowed, devInj: devInject}
 }
 
-// Routes registers the UI and API handlers on mux.
+// Routes registers the UI and API handlers on mux. Mutating routes are wrapped
+// in guard, which requires a same-origin request from a known browser session.
 func (s *Server) Routes(mux *http.ServeMux) {
+	g := s.guard
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /api/state", s.state)
+	mux.HandleFunc("POST /api/pair/token", g(s.pairToken))
 	mux.HandleFunc("GET /api/audio", s.audioGet)
-	mux.HandleFunc("POST /api/audio", s.audioSet)
-	mux.HandleFunc("POST /api/audio/test-speaker", s.testSpeaker)
-	mux.HandleFunc("POST /api/audio/pause", s.pauseSpeaking)
-	mux.HandleFunc("POST /api/mic-test/start", s.micTestStart)
-	mux.HandleFunc("POST /api/mic-test/stop", s.micTestStop)
+	mux.HandleFunc("POST /api/audio", g(s.audioSet))
+	mux.HandleFunc("POST /api/audio/test-speaker", g(s.testSpeaker))
+	mux.HandleFunc("POST /api/audio/pause", g(s.pauseSpeaking))
+	mux.HandleFunc("POST /api/mic-test/start", g(s.micTestStart))
+	mux.HandleFunc("POST /api/mic-test/stop", g(s.micTestStop))
 	mux.HandleFunc("GET /api/mic-test/level", s.micTestLevel)
 	mux.HandleFunc("GET /api/models", s.modelsGet)
-	mux.HandleFunc("POST /api/models", s.modelsSet)
-	mux.HandleFunc("POST /api/models/download", s.modelsDownload)
+	mux.HandleFunc("POST /api/models", g(s.modelsSet))
+	mux.HandleFunc("POST /api/models/download", g(s.modelsDownload))
 	mux.HandleFunc("GET /api/models/download", s.modelsDownloadStatus)
 	mux.HandleFunc("GET /api/interaction", s.interactionGet)
-	mux.HandleFunc("POST /api/interaction", s.interactionSet)
+	mux.HandleFunc("POST /api/interaction", g(s.interactionSet))
 	mux.HandleFunc("GET /api/install", s.installGet)
-	mux.HandleFunc("POST /api/install", s.installSet)
-	mux.HandleFunc("POST /api/session/focus", s.focus)
-	mux.HandleFunc("POST /api/session/rename", s.rename)
-	mux.HandleFunc("POST /api/session/revoke", s.revoke)
-	mux.HandleFunc("POST /api/ptt/start", s.pttStart)
-	mux.HandleFunc("POST /api/ptt/stop", s.pttStop)
-	mux.HandleFunc("POST /api/listen/constant", s.constant)
+	mux.HandleFunc("POST /api/install", g(s.installSet))
+	mux.HandleFunc("POST /api/session/focus", g(s.focus))
+	mux.HandleFunc("POST /api/session/rename", g(s.rename))
+	mux.HandleFunc("POST /api/session/revoke", g(s.revoke))
+	mux.HandleFunc("POST /api/ptt/start", g(s.pttStart))
+	mux.HandleFunc("POST /api/ptt/stop", g(s.pttStop))
+	mux.HandleFunc("POST /api/listen/constant", g(s.constant))
 	if s.devInj {
-		mux.HandleFunc("POST /api/dev/inject", s.devInject)
+		mux.HandleFunc("POST /api/dev/inject", g(s.devInject))
+	}
+}
+
+// guard requires a same-origin request carrying a known browser-session cookie.
+// This blocks cross-origin web pages (Origin mismatch, SameSite-stripped cookie)
+// from driving voice or settings. It is not a defense against a local process
+// that scripts the browser flow — see the threat model in the design docs.
+func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !authz.OriginAllowed(r.Header.Get("Origin"), s.allowed) {
+			http.Error(w, "bad origin", http.StatusForbidden)
+			return
+		}
+		c, err := r.Cookie(cookieName)
+		if err != nil || !s.store.KnownBrowser(c.Value) {
+			http.Error(w, "no browser session", http.StatusForbidden)
+			return
+		}
+		h(w, r)
 	}
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
+	// Establish a browser-session principal for this tab/profile if absent.
+	if c, err := r.Cookie(cookieName); err != nil || !s.store.KnownBrowser(c.Value) {
+		http.SetCookie(w, &http.Cookie{
+			Name:     cookieName,
+			Value:    s.store.NewBrowser(),
+			Path:     "/",
+			HttpOnly: true,
+			SameSite: http.SameSiteStrictMode,
+		})
+	}
 	b, err := assets.ReadFile("assets/index.html")
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -370,6 +407,17 @@ func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(b)
+}
+
+// pairToken issues a single-use pairing token for the current browser session.
+func (s *Server) pairToken(w http.ResponseWriter, r *http.Request) {
+	c, _ := r.Cookie(cookieName) // guard guarantees a valid cookie
+	tok, ok := s.store.IssueToken(c.Value)
+	if !ok {
+		http.Error(w, "no browser session", http.StatusForbidden)
+		return
+	}
+	writeJSON(w, map[string]any{"token": tok, "expires_in_seconds": int(authz.DefaultTokenTTL.Seconds())})
 }
 
 type stateResp struct {

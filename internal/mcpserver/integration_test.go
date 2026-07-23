@@ -9,19 +9,21 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/mkrzywonski/aispeech/internal/authz"
 	"github.com/mkrzywonski/aispeech/internal/engine"
 	"github.com/mkrzywonski/aispeech/internal/mcpserver"
 	"github.com/mkrzywonski/aispeech/internal/session"
 )
 
 // TestPairListenDeliver drives the full path an agent would take: connect,
-// discover it's unpaired, pair with the UI code, then listen and receive a
-// routed utterance.
+// discover it's unpaired, pair with a browser-issued token, then listen and
+// receive a routed utterance.
 func TestPairListenDeliver(t *testing.T) {
 	reg := session.New()
 	svc := engine.New(reg, nil, nil, nil, time.Minute, 600)
+	store := authz.NewStore(time.Minute)
 
-	ts := httptest.NewServer(mcpserver.NewHandler(reg, svc, mcpserver.Options{
+	ts := httptest.NewServer(mcpserver.NewHandler(reg, svc, store, mcpserver.Options{
 		DefaultListenTimeout: 5 * time.Second,
 		MaxListenTimeout:     time.Minute,
 	}))
@@ -42,22 +44,25 @@ func TestPairListenDeliver(t *testing.T) {
 		t.Fatal("unpaired listen should error")
 	}
 
-	// Grab the pairing code the UI would show for this pending session.
+	// The session is pending; a code is no longer exposed anywhere.
 	views, _, _ := reg.Snapshot()
-	if len(views) != 1 {
-		t.Fatalf("want 1 session, got %d", len(views))
-	}
-	code := views[0].PairingCode
-	if code == "" {
-		t.Fatal("no pairing code generated")
+	if len(views) != 1 || views[0].Paired {
+		t.Fatalf("want 1 pending session, got %+v", views)
 	}
 
-	// Pair.
+	// A wrong token is refused.
+	if res := callToolRaw(t, ctx, cs, "pair", map[string]any{"token": "WRONG"}); !res.IsError {
+		t.Fatal("pairing with a bad token should fail")
+	}
+
+	// Pair with a genuine browser-issued token.
+	cookie := store.NewBrowser()
+	tok, _ := store.IssueToken(cookie)
 	var pr struct {
 		OK   bool   `json:"ok"`
 		Name string `json:"name"`
 	}
-	structured(t, ctx, cs, "pair", map[string]any{"code": code}, &pr)
+	structured(t, ctx, cs, "pair", map[string]any{"token": tok}, &pr)
 	if !pr.OK {
 		t.Fatal("pair not ok")
 	}

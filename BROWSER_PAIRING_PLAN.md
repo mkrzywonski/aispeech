@@ -7,6 +7,49 @@ that AI connection to one specific browser UI tab. A process that can merely
 make HTTP requests to the local hub must not be able to view pairing secrets,
 start listening, or inject voice commands into an AI session.
 
+## Review decisions (2026-07-23)
+
+Adopted from review; these supersede any conflicting detail below.
+
+- **Host-header allowlist (new, required).** Reject any request whose `Host` is
+  not an allowlisted `127.0.0.1:PORT` / `localhost:PORT` (plus the configured
+  bind host). This is the primary defense against DNS-rebinding / malicious web
+  pages — the realistic remote attacker against a localhost service. Combine
+  with an `Origin` check on mutating routes.
+- **WSL2 resolved.** The app runs in WSL; the browser runs on Windows and
+  reaches the UI over the forwarded port. The hub may bind beyond pure loopback,
+  so the Host/Origin allowlist must include the reachable host and carries the
+  real weight (localhost cookies can't use `Secure`/`__Host-`).
+- **Token format.** 128-bit, base32 (uppercase, terminal/paste-safe),
+  single-use, 5-minute expiry, hashed at rest. It is copied (not manually
+  relayed), so length is not a burden; keep the strong entropy.
+- **Browser principal durability.** The `HttpOnly` cookie (browser profile) is
+  the durable principal; the per-tab id is a refinement. A reload re-binds a
+  fresh tab id to the existing cookie session rather than forcing a re-pair.
+- **Agent binding durability (v1).** Re-pair per MCP connection: an agent
+  restart is a new session needing a new token. A future optional "persistent
+  agent credential" (issued on first pair, stored by the proxy in a `0600` file,
+  re-presented on reconnect) can remove that friction within the threat model —
+  deferred.
+- **Drop pre-selected pending agent.** The agent that calls `pair(token)` is the
+  binding target; there is no separate UI pre-selection.
+- **UI is now a security principal.** Rigorously escape all agent- and
+  STT-derived content (session names, transcripts) and add a CSP; an XSS would
+  defeat the model.
+- **`mcp-proxy` is on the critical path.** `pair(token)` flows through the stdio
+  bridge; add a test that pairing works through it.
+
+### Phasing
+
+- **Phase 1 (closes the hole):** browser-session identity + browser-issued
+  token, `pair(token)`, remove the pairing code from `/api/state`, Host/Origin
+  allowlist, per-connection attempt limit + expiry, and gate mic-control
+  endpoints (`ptt/start`, `ptt/stop`, constant-listen) on a valid browser
+  session. Update tool guidance and the copy-token UI.
+- **Phase 2 (defense in depth):** full per-tab↔agent binding, CSRF tokens,
+  per-binding focus/rename/revoke gating, cross-session response filtering,
+  replace/revoke UX, and the exhaustive verification matrix.
+
 ## Security boundary
 
 The browser UI is a first-class principal, separate from an MCP agent

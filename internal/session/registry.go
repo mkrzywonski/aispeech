@@ -10,7 +10,6 @@ package session
 
 import (
 	"context"
-	"crypto/rand"
 	"fmt"
 	"sort"
 	"strings"
@@ -27,11 +26,13 @@ type Utterance struct {
 // Session is one connected agent.
 type Session struct {
 	ID          string    // MCP connection id (identity)
-	ClientName  string    // from MCP clientInfo, e.g. "claude"
-	Name        string    // display name / session-word (user-renamable)
-	PairingCode string    // shown in the UI while pending
-	Paired      bool      // completed the pairing handshake
-	Connected   time.Time // first seen
+	ClientName string    // from MCP clientInfo, e.g. "claude"
+	Name       string    // display name / session-word (user-renamable)
+	Paired     bool      // completed the pairing handshake
+	Browser    string    // bound browser-session cookie (set on pair)
+	Connected  time.Time // first seen
+
+	pairFails int // failed pair attempts (rate limiting)
 
 	// listen holds the channel of an outstanding listen() call, or nil when the
 	// session is not currently listening. Guarded by Registry.mu.
@@ -67,8 +68,10 @@ func New() *Registry {
 	return &Registry{byID: make(map[string]*Session)}
 }
 
-// Attach returns the session for id, creating a pending one (with a fresh
-// pairing code) on first contact. clientName seeds the default display name.
+// Attach returns the session for id, creating a pending one on first contact.
+// clientName seeds the default display name. No secret is generated here: a
+// session is authorized only when an agent presents a browser-issued token to
+// Pair.
 func (r *Registry) Attach(id, clientName string) *Session {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -79,19 +82,20 @@ func (r *Registry) Attach(id, clientName string) *Session {
 		clientName = "agent"
 	}
 	s := &Session{
-		ID:          id,
-		ClientName:  clientName,
-		Name:        r.uniqueNameLocked(clientName),
-		PairingCode: newCode(),
-		Connected:   time.Now(),
+		ID:         id,
+		ClientName: clientName,
+		Name:       r.uniqueNameLocked(clientName),
+		Connected:  time.Now(),
 	}
 	r.byID[id] = s
-	r.noticeLocked("info", fmt.Sprintf("%s connected — pairing code %s", s.Name, s.PairingCode))
+	r.noticeLocked("info", fmt.Sprintf("%s connected — waiting to pair", s.Name))
 	return s
 }
 
-// Pair verifies the code for a pending session and marks it paired.
-func (r *Registry) Pair(id, code string) (*Session, error) {
+// Pair marks a session authorized and binds it to the browser session cookie
+// that issued the consumed pairing token. The caller is responsible for
+// validating/consuming the token first.
+func (r *Registry) Pair(id, cookie string) (*Session, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := r.byID[id]
@@ -101,17 +105,35 @@ func (r *Registry) Pair(id, code string) (*Session, error) {
 	if s.Paired {
 		return s, nil
 	}
-	if !strings.EqualFold(strings.TrimSpace(code), s.PairingCode) {
-		r.noticeLocked("warn", fmt.Sprintf("%s: wrong pairing code", s.Name))
-		return nil, fmt.Errorf("incorrect pairing code")
-	}
 	s.Paired = true
-	s.PairingCode = ""
+	s.Browser = cookie
 	if r.focusID == "" {
 		r.focusID = s.ID // first paired session takes focus
 	}
 	r.noticeLocked("info", fmt.Sprintf("%s paired", s.Name))
 	return s, nil
+}
+
+// PairAttemptsExceeded reports whether a session has hit the failed-attempt
+// limit and further pairing should be refused.
+func (r *Registry) PairAttemptsExceeded(id string, limit int) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.byID[id]
+	return s != nil && s.pairFails >= limit
+}
+
+// NotePairFailure records a failed pair attempt and returns the running count.
+func (r *Registry) NotePairFailure(id string) int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.byID[id]
+	if s == nil {
+		return 0
+	}
+	s.pairFails++
+	r.noticeLocked("warn", fmt.Sprintf("%s: invalid pairing token", s.Name))
+	return s.pairFails
 }
 
 // Detach removes a session (on disconnect or revoke).
@@ -237,13 +259,12 @@ func (r *Registry) Rename(id, name string) error {
 
 // SessionView is a read-only projection of a Session for the UI/API.
 type SessionView struct {
-	ID          string `json:"id"`
-	ClientName  string `json:"client_name"`
-	Name        string `json:"name"`
-	PairingCode string `json:"pairing_code,omitempty"`
-	Paired      bool   `json:"paired"`
-	Listening   bool   `json:"listening"`
-	Focused     bool   `json:"focused"`
+	ID         string `json:"id"`
+	ClientName string `json:"client_name"`
+	Name       string `json:"name"`
+	Paired     bool   `json:"paired"`
+	Listening  bool   `json:"listening"`
+	Focused    bool   `json:"focused"`
 }
 
 // Get returns a locked snapshot of one session.
@@ -255,13 +276,12 @@ func (r *Registry) Get(id string) (SessionView, bool) {
 		return SessionView{}, false
 	}
 	return SessionView{
-		ID:          s.ID,
-		ClientName:  s.ClientName,
-		Name:        s.Name,
-		PairingCode: s.PairingCode,
-		Paired:      s.Paired,
-		Listening:   s.listen != nil,
-		Focused:     s.ID == r.focusID,
+		ID:         s.ID,
+		ClientName: s.ClientName,
+		Name:       s.Name,
+		Paired:     s.Paired,
+		Listening:  s.listen != nil,
+		Focused:    s.ID == r.focusID,
 	}, true
 }
 
@@ -273,13 +293,12 @@ func (r *Registry) Snapshot() ([]SessionView, []Notice, []Transcript) {
 	views := make([]SessionView, 0, len(r.byID))
 	for _, s := range r.byID {
 		views = append(views, SessionView{
-			ID:          s.ID,
-			ClientName:  s.ClientName,
-			Name:        s.Name,
-			PairingCode: s.PairingCode,
-			Paired:      s.Paired,
-			Listening:   s.listen != nil,
-			Focused:     s.ID == r.focusID,
+			ID:         s.ID,
+			ClientName: s.ClientName,
+			Name:       s.Name,
+			Paired:     s.Paired,
+			Listening:  s.listen != nil,
+			Focused:    s.ID == r.focusID,
 		})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
@@ -355,19 +374,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
-}
-
-// newCode returns an 8-character base32 pairing code (Crockford-ish, no
-// ambiguous characters).
-func newCode() string {
-	const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		// rand.Read failing is fatal-ish; fall back to a fixed but visible code.
-		return "PAIRPAIR"
-	}
-	for i := range b {
-		b[i] = alphabet[int(b[i])%len(alphabet)]
-	}
-	return string(b)
 }

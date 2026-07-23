@@ -9,8 +9,8 @@ import (
 // pair attaches and pairs a session, returning its id.
 func pair(t *testing.T, r *Registry, id, client string) {
 	t.Helper()
-	s := r.Attach(id, client)
-	if _, err := r.Pair(id, s.PairingCode); err != nil {
+	r.Attach(id, client)
+	if _, err := r.Pair(id, "browser-cookie"); err != nil {
 		t.Fatalf("pair %s: %v", client, err)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/mkrzywonski/aispeech/internal/authz"
 	"github.com/mkrzywonski/aispeech/internal/config"
 	"github.com/mkrzywonski/aispeech/internal/engine"
 	"github.com/mkrzywonski/aispeech/internal/mcpserver"
@@ -80,6 +81,8 @@ func main() {
 	}
 	models := engine.NewModelManager(svc, audioCtx)
 	store := modelstore.New(cfg.ResolvedModelsDir())
+	authStore := authz.NewStore(authz.DefaultTokenTTL)
+	allowedHosts := authz.AllowedHosts(bindAddr)
 	controls := web.NewControls(web.Deps{
 		Audio:      audioControl,
 		Svc:        svc,
@@ -92,13 +95,16 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	web.New(reg, svc, controls, *devInject).Routes(mux)
-	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, mcpserver.Options{
+	web.New(reg, svc, controls, authStore, allowedHosts, *devInject).Routes(mux)
+	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore, mcpserver.Options{
 		DefaultListenTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,
 		MaxListenTimeout:     10 * time.Minute,
 	}))
 
-	srv := &http.Server{Addr: bindAddr, Handler: mux}
+	// Reject requests whose Host isn't the loopback/bound authority — the
+	// primary defense against DNS-rebinding and malicious web pages.
+	handler := authz.HostGuard(mux, allowedHosts)
+	srv := &http.Server{Addr: bindAddr, Handler: handler}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
