@@ -67,6 +67,11 @@
   .pill.off { background: #e5484d; color: #fff; border-color: #e5484d; }
   .pill.warn { background: #f5a623; color: #111; border-color: #f5a623; }
   #listenhint:not([hidden]) { color: #f5a623; margin: .2rem 0 0; }
+  .smic { display: inline-flex; align-items: center; }
+  .smic svg { color: #888; }
+  .smic.on svg { color: #30a46c; }
+  .smic .slash { display: inline; }
+  .smic.on .slash { display: none; }
   .star { color: #2d7cf0; }
 
   .transcripts { border: 1px solid #8884; border-radius: 8px; padding: .5rem .7rem; max-height: 260px; overflow-y: auto; background: #8880; }
@@ -151,7 +156,7 @@
 <p class="hint">A session's <strong>name is its wake word</strong> — say it ("Claude, …") to route your speech there and switch focus. The starred row has focus.</p>
 <div class="tablewrap">
 <table>
-  <thead><tr><th>Session</th><th>Client</th><th>State</th><th>Focus</th><th><span class="sr-only">Actions</span></th></tr></thead>
+  <thead><tr><th>Session</th><th>Client</th><th>Listening</th><th>Focus</th><th><span class="sr-only">Actions</span></th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
 </div>
@@ -226,6 +231,18 @@
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const base = (p) => String(p).split('/').pop();
+// A small microphone icon reused to show a session's listen() status: active
+// (green, no slash) when the agent is waiting, red circle-with-slash when not.
+function micIcon(listening) {
+  return `<span class="smic ${listening ? 'on' : ''}" title="${listening ? 'listening (waiting for voice)' : 'not listening'}" aria-label="${listening ? 'listening' : 'not listening'}">
+    <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <rect x="9" y="3" width="6" height="10" rx="3" fill="currentColor" stroke="none"></rect>
+      <path d="M6 11a6 6 0 0 0 12 0"></path>
+      <line x1="12" y1="17" x2="12" y2="21"></line>
+      <line x1="8.5" y1="21" x2="15.5" y2="21"></line>
+      <g class="slash" stroke="#e5484d"><circle cx="12" cy="12" r="11" fill="none"></circle><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"></line></g>
+    </svg></span>`;
+}
 const mb = (n) => (n / 1048576).toFixed(0) + ' MB';
 
 async function post(path, body) {
@@ -525,10 +542,10 @@ function render(state) {
   // Agent-listening status: distinct from mic-on. The mic can be hot while the
   // focused agent is busy (not waiting on listen()), in which case speech drops.
   const focused = state.sessions.find(s => s.focused && s.paired);
+  const listeningCount = state.sessions.filter(s => s.paired && s.listening).length;
   const al = $('ailisten');
-  if (!focused) { al.textContent = 'no agent in focus'; al.className = 'pill'; }
-  else if (focused.listening) { al.textContent = focused.name + ': waiting for you'; al.className = 'pill on'; }
-  else { al.textContent = focused.name + ': not listening'; al.className = 'pill warn'; }
+  if (listeningCount === 0) { al.textContent = 'no agents listening'; al.className = 'pill'; }
+  else { al.textContent = `${listeningCount} agent${listeningCount === 1 ? '' : 's'} listening`; al.className = 'pill on'; }
 
   const hint = $('listenhint');
   if (micHot && focused && !focused.listening) {
@@ -561,7 +578,7 @@ function render(state) {
   for (const s of paired) {
     const tr = document.createElement('tr');
     if (s.focused) tr.classList.add('focus');
-    const stateCell = `<span class="pill ${s.listening ? 'on' : ''}">${s.listening ? 'listening' : 'idle'}</span>`;
+    const stateCell = micIcon(s.listening);
     const focusCell = s.focused ? '<span class="star" aria-label="Focused session" title="Focused">★</span>' : `<button data-focus="${s.id}">focus</button>`;
     tr.innerHTML = `
       <td><input class="name-in" value="${esc(s.name)}" data-rename="${s.id}" aria-label="Session name (wake word)"></td>
