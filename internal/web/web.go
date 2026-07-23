@@ -27,6 +27,9 @@ type AudioControl interface {
 	SetOutputDevice(string)
 	SetOutputVolume(float64)
 	SetInputGain(float64)
+	SetMuted(bool)
+	Muted() bool
+	StopPlayback()
 	TestSpeaker() error
 	StartMicTest() error
 	StopMicTest() error
@@ -207,6 +210,7 @@ type audioState struct {
 	OutputDevice string   `json:"output_device"`
 	Volume       float64  `json:"volume"`
 	Gain         float64  `json:"gain"`
+	Muted        bool     `json:"muted"`
 }
 
 func (c *Controls) state() audioState {
@@ -217,6 +221,7 @@ func (c *Controls) state() audioState {
 		OutputDevice: c.cfg.OutputDevice,
 		Volume:       c.cfg.OutputVolume,
 		Gain:         c.cfg.InputGain,
+		Muted:        c.cfg.Muted,
 	}
 	if c.audio != nil {
 		st.Available = true
@@ -231,6 +236,7 @@ type audioUpdate struct {
 	OutputDevice *string  `json:"output_device"`
 	Volume       *float64 `json:"volume"`
 	Gain         *float64 `json:"gain"`
+	Muted        *bool    `json:"muted"`
 }
 
 func (c *Controls) apply(u audioUpdate) error {
@@ -260,7 +266,19 @@ func (c *Controls) apply(u audioUpdate) error {
 			c.audio.SetInputGain(*u.Gain)
 		}
 	}
+	if u.Muted != nil {
+		c.cfg.Muted = *u.Muted
+		if c.audio != nil {
+			c.audio.SetMuted(*u.Muted)
+		}
+	}
 	return c.save()
+}
+
+func (c *Controls) stopPlayback() {
+	if c.audio != nil {
+		c.audio.StopPlayback()
+	}
 }
 
 var errNoAudio = errorString("no audio backend available")
@@ -318,6 +336,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/audio", s.audioGet)
 	mux.HandleFunc("POST /api/audio", s.audioSet)
 	mux.HandleFunc("POST /api/audio/test-speaker", s.testSpeaker)
+	mux.HandleFunc("POST /api/audio/stop-speaking", s.stopSpeaking)
 	mux.HandleFunc("POST /api/mic-test/start", s.micTestStart)
 	mux.HandleFunc("POST /api/mic-test/stop", s.micTestStop)
 	mux.HandleFunc("GET /api/mic-test/level", s.micTestLevel)
@@ -398,6 +417,11 @@ func (s *Server) testSpeaker(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("test speaker", "err", err)
 		}
 	}()
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) stopSpeaking(w http.ResponseWriter, r *http.Request) {
+	s.controls.stopPlayback()
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

@@ -28,6 +28,11 @@ type AudioContext struct {
 	outVol   atomic.Uint64 // float64 bits: playback gain
 	inGain   atomic.Uint64 // float64 bits: capture gain
 	micLevel atomic.Uint64 // float64 bits: latest mic-test RMS (0..1)
+	muted    atomic.Bool   // silences playback (persisted; independent of volume)
+
+	playMu   sync.Mutex // guards the active playback device
+	playDev  *malgo.Device
+	playStop chan struct{}
 }
 
 // NewAudioContext initializes the audio backend. It fails when no backend/device
@@ -64,6 +69,23 @@ func (a *AudioContext) SetOutputVolume(v float64) { a.outVol.Store(math.Float64b
 
 // SetInputGain sets the capture gain.
 func (a *AudioContext) SetInputGain(v float64) { a.inGain.Store(math.Float64bits(clampGain(v))) }
+
+// SetMuted silences (or restores) playback without changing the volume level.
+func (a *AudioContext) SetMuted(m bool) { a.muted.Store(m) }
+
+// Muted reports whether playback is muted.
+func (a *AudioContext) Muted() bool { return a.muted.Load() }
+
+// StopPlayback interrupts the currently-playing sound (e.g. a TTS utterance).
+func (a *AudioContext) StopPlayback() {
+	a.playMu.Lock()
+	if a.playStop != nil {
+		close(a.playStop)
+		a.playStop = nil
+		a.playDev = nil
+	}
+	a.playMu.Unlock()
+}
 
 func (a *AudioContext) outputVolume() float64 { return math.Float64frombits(a.outVol.Load()) }
 func (a *AudioContext) inputGain() float64    { return math.Float64frombits(a.inGain.Load()) }
@@ -124,16 +146,17 @@ func (a *AudioContext) deviceNames(kind malgo.DeviceType) []string {
 	return names
 }
 
-// Play plays mono float32 PCM at the given sample rate, blocking until done.
-// The current output volume is applied.
+// Play plays mono float32 PCM at the given sample rate, blocking until it
+// finishes or is interrupted by StopPlayback. Output volume and mute are applied
+// live in the callback, so changing them takes effect mid-utterance.
 func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
 	if len(pcm) == 0 {
 		return nil
 	}
-	vol := float32(a.outputVolume())
+	// Store raw (unscaled) samples; gain/mute are applied per-callback.
 	buf := make([]byte, len(pcm)*4)
 	for i, s := range pcm {
-		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(clampF(s*vol)))
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(s))
 	}
 
 	a.mu.Lock()
@@ -154,14 +177,19 @@ func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
 	)
 	cb := malgo.DeviceCallbacks{
 		Data: func(out, _ []byte, frames uint32) {
-			want := int(frames) * 4
-			n := copy(out, buf[pos:])
-			if n < want { // zero-fill the tail
-				for i := n; i < want && i < len(out); i++ {
-					out[i] = 0
-				}
+			g := float32(a.outputVolume())
+			if a.muted.Load() {
+				g = 0
 			}
-			pos += n
+			want := int(frames) * 4
+			i := 0
+			for ; i+4 <= want && pos+4 <= len(buf); i, pos = i+4, pos+4 {
+				f := math.Float32frombits(binary.LittleEndian.Uint32(buf[pos:])) * g
+				binary.LittleEndian.PutUint32(out[i:], math.Float32bits(clampF(f)))
+			}
+			for ; i < want && i < len(out); i++ {
+				out[i] = 0
+			}
 			if pos >= len(buf) {
 				once.Do(func() { close(done) })
 			}
@@ -173,10 +201,26 @@ func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
 		return err
 	}
 	defer dev.Uninit()
+
+	stop := make(chan struct{})
+	a.playMu.Lock()
+	a.playDev, a.playStop = dev, stop
+	a.playMu.Unlock()
+	defer func() {
+		a.playMu.Lock()
+		if a.playStop == stop {
+			a.playDev, a.playStop = nil, nil
+		}
+		a.playMu.Unlock()
+	}()
+
 	if err := dev.Start(); err != nil {
 		return err
 	}
-	<-done
+	select {
+	case <-done: // finished
+	case <-stop: // interrupted by StopPlayback
+	}
 	return nil
 }
 

@@ -31,6 +31,7 @@ type Config struct {
 	// Levels (0..1 multipliers).
 	OutputVolume float64 `json:"output_volume"` // TTS playback gain
 	InputGain    float64 `json:"input_gain"`    // microphone gain
+	Muted        bool    `json:"muted"`         // silence playback (persists across restarts)
 
 	// Interaction.
 	DialogTimeoutSeconds int `json:"dialog_timeout_seconds"` // PTT dialog idle timeout

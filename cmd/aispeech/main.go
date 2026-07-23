@@ -68,6 +68,7 @@ func main() {
 		audioCtx.SetOutputDevice(cfg.OutputDevice)
 		audioCtx.SetOutputVolume(cfg.OutputVolume)
 		audioCtx.SetInputGain(cfg.InputGain)
+		audioCtx.SetMuted(cfg.Muted)
 		audioControl = audioCtx
 
 		in, out := len(audioCtx.CaptureDevices()), len(audioCtx.PlaybackDevices())

@@ -120,6 +120,7 @@
     </svg>
   </span>
   <button class="primary big" id="ptt">Start listening</button>
+  <button id="stopspk" title="Interrupt the current spoken reply">Stop speaking</button>
   <label class="idle">Stop listening after <input type="number" id="idlemin" min="0.25" step="0.25"> minutes idle</label>
   <span class="volwrap" title="Speaker volume">🔊 <input type="range" id="vol" min="0" max="2" step="0.05"><span class="lvl" id="volv"></span> <button id="mute">Mute</button></span>
   <span class="cap">Space toggles listening.</span>
@@ -242,21 +243,21 @@ $('devtext').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('devs
 async function postAudio(u) { await fetch('/api/audio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(u) }); }
 $('in').onchange = (e) => postAudio({ input_device: e.target.value });
 $('out').onchange = (e) => postAudio({ output_device: e.target.value });
-let lastVol = 1;
+let muted = false;
 $('vol').oninput = (e) => { $('volv').textContent = fmtPct(e.target.value); };
-$('vol').onchange = (e) => { const v = parseFloat(e.target.value); if (v > 0) lastVol = v; setVol(v, true); };
-$('mute').onclick = () => {
-  const cur = parseFloat($('vol').value);
-  if (cur > 0) { lastVol = cur; setVol(0, true); } else { setVol(lastVol > 0 ? lastVol : 1, true); }
-};
-function setVol(v, save) {
-  $('vol').value = v; $('volv').textContent = fmtPct(v);
-  $('mute').textContent = v > 0 ? 'Mute' : 'Unmute';
-  $('mute').classList.toggle('active', v == 0);
-  if (save) postAudio({ volume: v });
+$('vol').onchange = (e) => postAudio({ volume: parseFloat(e.target.value) }); // does not unmute
+$('mute').onclick = () => { muted = !muted; applyMuteUI(); postAudio({ muted }); };
+$('stopspk').onclick = () => fetch('/api/audio/stop-speaking', { method: 'POST' });
+function applyMuteUI() {
+  $('mute').textContent = muted ? 'Muted' : 'Mute';
+  $('mute').classList.toggle('active', muted);
+}
+function setAudioLevels(a) {
+  if (document.activeElement !== $('vol')) { $('vol').value = a.volume; $('volv').textContent = fmtPct(a.volume); }
+  muted = !!a.muted; applyMuteUI();
 }
 async function initVolume() {
-  try { const a = await (await fetch('/api/audio')).json(); if (a.volume > 0) lastVol = a.volume; setVol(a.volume, false); } catch (e) {}
+  try { setAudioLevels(await (await fetch('/api/audio')).json()); } catch (e) {}
 }
 $('gain').oninput = (e) => { $('gainv').textContent = fmtPct(e.target.value); };
 $('gain').onchange = (e) => postAudio({ gain: parseFloat(e.target.value) });
@@ -298,7 +299,7 @@ async function refreshAudio() {
   $('audiogrid').style.display = a.available ? '' : 'none';
   fillSelect($('in'), a.input || [], a.input_device);
   fillSelect($('out'), a.output || [], a.output_device);
-  if (document.activeElement !== $('vol')) { if (a.volume > 0) lastVol = a.volume; setVol(a.volume, false); }
+  setAudioLevels(a);
   if (document.activeElement !== $('gain')) { $('gain').value = a.gain; $('gainv').textContent = fmtPct(a.gain); }
 }
 
