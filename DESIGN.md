@@ -179,8 +179,9 @@ before pairing return an error with guidance.
 | Tool | Params | Returns | Notes |
 |---|---|---|---|
 | `pair` | `token: string` | `{ ok, session_id, name }` or error | Authorizes this connection with a browser-issued token the user copies from the UI and pastes in (see §7). Failed attempts are rate-limited. `name` defaults to the MCP `clientInfo` name (e.g. `claude`); user-renamable in the UI. |
-| `listen` | `timeout_seconds?: int` | `{ text, session }` on an utterance routed here; `{ status: "timeout" }` otherwise | **Long-poll.** Blocks until an utterance is endpointed and routed to *this* focused session, or timeout. Emits MCP `progress` notifications as keepalive. On timeout the agent may call again or stop. |
-| `speak` | `text: string` | `{ ok, spoken_chars, truncated }` | Enqueues TTS to the selected output; returns after playback (bounded). Enforces the character cap. |
+| `converse` | `text: string`, `timeout_seconds?: int` | `{ status, text, session }` | **Speak-then-listen** in one call — speak `text`, then wait for the next command. The natural way to stay in a voice dialog; the server's `instructions` steer the model to call it before ending each turn. |
+| `listen` | `timeout_seconds?: int` | `{ status, text, session }` | **Long-poll.** Waits for an utterance routed to *this* focused session, or a `timeout`/`cancelled` status. Use when there's no spoken reply to give yet. |
+| `speak` | `text: string` | `{ ok, spoken_chars, truncated }` | Speak without waiting. FIFO-serialized to the selected output; returns after playback. Enforces the character cap. |
 | `end_session` | — | `{ ok }` | Drops this voice channel; releases focus if held. The agent's escape hatch. |
 | `status` | — | `{ paired, name, focused, listening_mode, mic_active, other_sessions }` | Lets the agent reason about whether speaking/listening is currently useful. |
 

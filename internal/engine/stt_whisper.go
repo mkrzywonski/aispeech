@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"unicode"
 )
 
 // WhisperSTT transcribes audio by invoking the whisper.cpp CLI.
@@ -69,9 +70,37 @@ func cleanTranscript(s string) string {
 		}
 	}
 	text := strings.Join(lines, " ")
-	// whisper emits bracketed markers like [BLANK_AUDIO] on silence.
-	if strings.HasPrefix(text, "[") && strings.HasSuffix(text, "]") {
+	// Drop whisper non-speech annotations: the whole utterance wrapped in [], (),
+	// or ** — e.g. "[BLANK_AUDIO]", "(keyboard clicking)", "*laughs*" — and
+	// utterances with no actual words (e.g. "...", "♪♪♪"). These come from the VAD
+	// triggering on noise and are never useful voice commands.
+	if isAnnotation(text) || !hasWord(text) {
 		return ""
 	}
 	return text
+}
+
+// isAnnotation reports whether s is a single bracketed/parenthesized/starred
+// non-speech marker spanning the whole string.
+func isAnnotation(s string) bool {
+	if len(s) < 2 {
+		return false
+	}
+	for _, p := range [][2]byte{{'[', ']'}, {'(', ')'}, {'*', '*'}} {
+		if s[0] == p[0] && s[len(s)-1] == p[1] &&
+			!strings.ContainsRune(s[1:len(s)-1], rune(p[0])) &&
+			!strings.ContainsRune(s[1:len(s)-1], rune(p[1])) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWord(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return true
+		}
+	}
+	return false
 }

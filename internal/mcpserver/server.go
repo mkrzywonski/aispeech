@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -47,8 +48,19 @@ func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, 
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 }
 
+// serverInstructions is sent to the client at initialize and tells the model how
+// to run an ongoing voice dialog (the hub cannot continue a turn on its own).
+const serverInstructions = "This server is a voice channel for talking with the user out loud. " +
+	"When a voice session is paired and you receive a spoken utterance, enter VOICE-DIALOG MODE " +
+	"and stay in it: after handling each request, end your turn by calling `converse` (speak a " +
+	"short reply AND wait for the next command in one step) — or `listen` if you have nothing to " +
+	"say yet. Keep spoken replies terse; let detail scroll in the terminal. On a `timeout` status, " +
+	"call `converse`/`listen` again to keep waiting. Leave voice-dialog mode only when the user " +
+	"says to stop, the microphone is turned off, pairing is revoked, or the session ends."
+
 func (d *deps) build() *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: version}, nil)
+	s := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: version},
+		&mcp.ServerOptions{Instructions: serverInstructions})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "pair",
@@ -59,18 +71,28 @@ func (d *deps) build() *mcp.Server {
 	}, d.pair)
 
 	mcp.AddTool(s, &mcp.Tool{
+		Name: "converse",
+		Description: "Speak a short reply AND immediately wait for the user's next spoken command — " +
+			"the natural way to stay in a voice dialog. Prefer this over speak-then-end-turn: after " +
+			"handling a voice command, call converse with your reply to keep the conversation going. " +
+			"Returns the next utterance (status \"ok\") or a terminal status (\"timeout\", " +
+			"\"cancelled\"). On \"timeout\", call converse or listen again while voice mode is active.",
+	}, d.converse)
+
+	mcp.AddTool(s, &mcp.Tool{
 		Name: "listen",
-		Description: "Wait for the user to speak a command to this session and return the " +
-			"transcript. Blocks until speech is routed here or the timeout elapses. If it " +
-			"returns status \"timeout\", no speech arrived — call listen again to keep " +
-			"waiting, or stop. Typically call listen after finishing a spoken exchange.",
+		Description: "Wait for the user's next spoken command and return the transcript, WITHOUT " +
+			"speaking first. Use converse instead when you have a spoken reply. Blocks until speech " +
+			"is routed here or the timeout elapses; status \"timeout\" means call again to keep " +
+			"waiting. Stay in the listen/converse loop to keep the voice dialog alive.",
 	}, d.listen)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "speak",
-		Description: "Speak a SHORT reply aloud to the user. Use terse confirmations and " +
-			"answers only — do not read code, diffs, or long output aloud; let those scroll " +
-			"in the terminal. Long text is truncated.",
+		Description: "Speak a SHORT reply aloud without waiting for a response. Use terse " +
+			"confirmations and answers only — do not read code, diffs, or long output aloud; let " +
+			"those scroll in the terminal. To reply AND keep listening, use converse instead. Long " +
+			"text is truncated.",
 	}, d.speak)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -104,6 +126,11 @@ type listenOut struct {
 	Status  string `json:"status"` // ok | timeout | cancelled
 	Text    string `json:"text,omitempty"`
 	Session string `json:"session,omitempty"`
+}
+
+type converseIn struct {
+	Text           string `json:"text" jsonschema:"the short reply to speak before waiting for the next command"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"how long to wait for the next command, in seconds"`
 }
 
 type speakIn struct {
@@ -162,19 +189,19 @@ func (d *deps) pair(ctx context.Context, req *mcp.CallToolRequest, in pairIn) (*
 	return nil, pairOut{OK: true, SessionID: s.ID, Name: s.Name}, nil
 }
 
-func (d *deps) listen(ctx context.Context, req *mcp.CallToolRequest, in listenIn) (*mcp.CallToolResult, listenOut, error) {
-	v := d.attach(req)
-	if !v.Paired {
-		return nil, listenOut{}, errUnpaired
+// timeout resolves a requested wait to the configured default/max window.
+func (d *deps) timeout(seconds int) time.Duration {
+	t := d.opts.DefaultListenTimeout
+	if seconds > 0 {
+		t = time.Duration(seconds) * time.Second
 	}
-	timeout := d.opts.DefaultListenTimeout
-	if in.TimeoutSeconds > 0 {
-		timeout = time.Duration(in.TimeoutSeconds) * time.Second
+	if t > d.opts.MaxListenTimeout {
+		t = d.opts.MaxListenTimeout
 	}
-	if timeout > d.opts.MaxListenTimeout {
-		timeout = d.opts.MaxListenTimeout
-	}
-	u, status := d.reg.Listen(ctx, req.Session.ID(), timeout)
+	return t
+}
+
+func waitResult(u session.Utterance, status string) (*mcp.CallToolResult, listenOut, error) {
 	switch status {
 	case "ok":
 		return nil, listenOut{Status: "ok", Text: u.Text, Session: u.Target}, nil
@@ -183,6 +210,31 @@ func (d *deps) listen(ctx context.Context, req *mcp.CallToolRequest, in listenIn
 	default: // timeout | cancelled
 		return nil, listenOut{Status: status}, nil
 	}
+}
+
+func (d *deps) listen(ctx context.Context, req *mcp.CallToolRequest, in listenIn) (*mcp.CallToolResult, listenOut, error) {
+	v := d.attach(req)
+	if !v.Paired {
+		return nil, listenOut{}, errUnpaired
+	}
+	u, status := d.reg.Listen(ctx, req.Session.ID(), d.timeout(in.TimeoutSeconds))
+	return waitResult(u, status)
+}
+
+// converse speaks a reply and then waits for the next command — the one-call way
+// to stay in a voice dialog.
+func (d *deps) converse(ctx context.Context, req *mcp.CallToolRequest, in converseIn) (*mcp.CallToolResult, listenOut, error) {
+	v := d.attach(req)
+	if !v.Paired {
+		return nil, listenOut{}, errUnpaired
+	}
+	if strings.TrimSpace(in.Text) != "" {
+		if _, _, err := d.svc.Speak(ctx, in.Text); err != nil {
+			return nil, listenOut{}, fmt.Errorf("speak failed: %w", err)
+		}
+	}
+	u, status := d.reg.Listen(ctx, req.Session.ID(), d.timeout(in.TimeoutSeconds))
+	return waitResult(u, status)
 }
 
 func (d *deps) speak(ctx context.Context, req *mcp.CallToolRequest, in speakIn) (*mcp.CallToolResult, speakOut, error) {
