@@ -28,22 +28,25 @@ type Options struct {
 }
 
 type deps struct {
-	reg   *session.Registry
-	svc   *engine.Service
-	store *authz.Store
-	opts  Options
+	reg    *session.Registry
+	svc    *engine.Service
+	store  *authz.Store
+	voices func() []string // installed TTS voices, for distinct per-session assignment
+	opts   Options
 }
 
 // NewHandler builds the MCP HTTP handler. A single logical server is shared
 // across all connections; the SDK isolates each connection as its own session.
-func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, opts Options) http.Handler {
+// voices (may be nil) lists installed TTS voices so each session gets a distinct
+// one.
+func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, voices func() []string, opts Options) http.Handler {
 	if opts.DefaultListenTimeout == 0 {
 		opts.DefaultListenTimeout = 2 * time.Minute
 	}
 	if opts.MaxListenTimeout == 0 {
 		opts.MaxListenTimeout = 10 * time.Minute
 	}
-	d := &deps{reg: reg, svc: svc, store: store, opts: opts}
+	d := &deps{reg: reg, svc: svc, store: store, voices: voices, opts: opts}
 	srv := d.build()
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 }
@@ -174,6 +177,9 @@ func (d *deps) attach(req *mcp.CallToolRequest) session.SessionView {
 		name = ip.ClientInfo.Name
 	}
 	d.reg.Attach(id, name)
+	if d.voices != nil {
+		d.reg.AssignVoice(id, d.voices()) // distinct voice per session
+	}
 	v, _ := d.reg.Get(id)
 	return v
 }
@@ -237,7 +243,7 @@ func (d *deps) converse(ctx context.Context, req *mcp.CallToolRequest, in conver
 		return nil, listenOut{}, errUnpaired
 	}
 	if strings.TrimSpace(in.Text) != "" {
-		if _, _, err := d.svc.Speak(ctx, in.Text); err != nil {
+		if _, _, err := d.svc.SpeakAs(ctx, req.Session.ID(), in.Text); err != nil {
 			return nil, listenOut{}, fmt.Errorf("speak failed: %w", err)
 		}
 	}
@@ -250,7 +256,7 @@ func (d *deps) speak(ctx context.Context, req *mcp.CallToolRequest, in speakIn) 
 	if !v.Paired {
 		return nil, speakOut{}, errUnpaired
 	}
-	n, trunc, err := d.svc.Speak(ctx, in.Text)
+	n, trunc, err := d.svc.SpeakAs(ctx, req.Session.ID(), in.Text)
 	if err != nil {
 		return nil, speakOut{}, err
 	}

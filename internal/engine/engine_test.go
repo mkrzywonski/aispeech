@@ -24,7 +24,7 @@ func newBlockingSpeaker() *blockingSpeaker {
 	}
 }
 
-func (s *blockingSpeaker) Speak(_ context.Context, text string) error {
+func (s *blockingSpeaker) Speak(_ context.Context, text, _ string) error {
 	s.mu.Lock()
 	s.order = append(s.order, text)
 	s.mu.Unlock()

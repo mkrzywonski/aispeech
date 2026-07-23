@@ -96,10 +96,12 @@ func main() {
 
 	mux := http.NewServeMux()
 	web.New(reg, svc, controls, authStore, allowedHosts, *devInject).Routes(mux)
-	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore, mcpserver.Options{
-		DefaultListenTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,
-		MaxListenTimeout:     10 * time.Minute,
-	}))
+	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore,
+		func() []string { return store.Installed(modelstore.Piper) },
+		mcpserver.Options{
+			DefaultListenTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,
+			MaxListenTimeout:     10 * time.Minute,
+		}))
 
 	// Reject requests whose Host isn't the loopback/bound authority — the
 	// primary defense against DNS-rebinding and malicious web pages.

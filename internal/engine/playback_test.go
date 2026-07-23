@@ -26,7 +26,7 @@ func (tr *tracker) run() {
 
 type busySpeaker struct{ tr *tracker }
 
-func (b busySpeaker) Speak(context.Context, string) error { b.tr.run(); return nil }
+func (b busySpeaker) Speak(context.Context, string, string) error { b.tr.run(); return nil }
 
 type busySound struct{ tr *tracker }
 

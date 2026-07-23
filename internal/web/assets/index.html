@@ -156,7 +156,7 @@
 <p class="hint">A session's <strong>name is its wake word</strong> — say it ("Claude, …") to route your speech there and switch focus. The starred row has focus.</p>
 <div class="tablewrap">
 <table>
-  <thead><tr><th>Session</th><th>Client</th><th>Listening</th><th>Focus</th><th><span class="sr-only">Actions</span></th></tr></thead>
+  <thead><tr><th>Session</th><th>Client</th><th>Listening</th><th>Focus</th><th>Voice</th><th><span class="sr-only">Actions</span></th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
 </div>
@@ -574,23 +574,37 @@ function render(state) {
   appendTranscripts(state.transcripts || []);
   appendNotices(state.notices || []);
 
-  const rows = $('rows'); rows.innerHTML = ''; $('empty').hidden = state.sessions.length > 0;
-  for (const s of paired) {
-    const tr = document.createElement('tr');
-    if (s.focused) tr.classList.add('focus');
-    const stateCell = micIcon(s.listening);
-    const focusCell = s.focused ? '<span class="star" aria-label="Focused session" title="Focused">★</span>' : `<button data-focus="${s.id}">focus</button>`;
-    tr.innerHTML = `
-      <td><input class="name-in" value="${esc(s.name)}" data-rename="${s.id}" aria-label="Session name (wake word)"></td>
-      <td class="muted">${esc(s.client_name)}</td>
-      <td>${stateCell}</td>
-      <td>${focusCell}</td>
-      <td><button data-revoke="${s.id}">revoke</button></td>`;
-    rows.appendChild(tr);
+  $('empty').hidden = state.sessions.length > 0;
+  // Don't rebuild rows while the user is interacting with a control in them
+  // (renaming, choosing a voice) — it would clobber the open input/dropdown.
+  const rows = $('rows');
+  if (!rows.contains(document.activeElement)) {
+    rows.innerHTML = '';
+    for (const s of paired) {
+      const tr = document.createElement('tr');
+      if (s.focused) tr.classList.add('focus');
+      const focusCell = s.focused ? '<span class="star" aria-label="Focused session" title="Focused">★</span>' : `<button data-focus="${s.id}">focus</button>`;
+      tr.innerHTML = `
+        <td><input class="name-in" value="${esc(s.name)}" data-rename="${s.id}" aria-label="Session name (wake word)"></td>
+        <td class="muted">${esc(s.client_name)}</td>
+        <td>${micIcon(s.listening)}</td>
+        <td>${focusCell}</td>
+        <td>${voiceSelect(s, state.voices)}</td>
+        <td><button data-revoke="${s.id}">revoke</button></td>`;
+      rows.appendChild(tr);
+    }
+    rows.querySelectorAll('[data-focus]').forEach(b => b.onclick = () => post('/api/session/focus', { id: b.dataset.focus }));
+    rows.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => post('/api/session/revoke', { id: b.dataset.revoke }));
+    rows.querySelectorAll('[data-rename]').forEach(inp => inp.onchange = () => post('/api/session/rename', { id: inp.dataset.rename, name: inp.value }));
+    rows.querySelectorAll('[data-voice]').forEach(sel => sel.onchange = () => post('/api/session/voice', { id: sel.dataset.voice, voice: sel.value }));
   }
-  rows.querySelectorAll('[data-focus]').forEach(b => b.onclick = () => post('/api/session/focus', { id: b.dataset.focus }));
-  rows.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => post('/api/session/revoke', { id: b.dataset.revoke }));
-  rows.querySelectorAll('[data-rename]').forEach(inp => inp.onchange = () => post('/api/session/rename', { id: inp.dataset.rename, name: inp.value }));
+}
+
+const voiceName = (p) => base(p).replace(/\.onnx$/, '');
+function voiceSelect(s, voices) {
+  const opts = ['<option value="">default</option>'].concat((voices || []).map(v =>
+    `<option value="${esc(v)}" ${v === s.voice ? 'selected' : ''}>${esc(voiceName(v))}</option>`));
+  return `<select class="vsel" data-voice="${s.id}" aria-label="Voice for this session">${opts.join('')}</select>`;
 }
 
 // --- connection tracking ---

@@ -104,6 +104,11 @@ func (c *Controls) installState() map[string]any {
 	return map[string]any{"url": c.mcpURL, "agents": mcpinstall.Statuses(c.mcpURL)}
 }
 
+// InstalledVoices lists installed piper voice paths (for per-session selection).
+func (c *Controls) InstalledVoices() []string {
+	return c.store.Installed(modelstore.Piper)
+}
+
 func (c *Controls) modelOptions() engine.ModelOptions {
 	return engine.ModelOptions{
 		WhisperBin:   c.cfg.WhisperBin,
@@ -361,6 +366,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/install", g(s.installSet))
 	mux.HandleFunc("POST /api/session/focus", g(s.focus))
 	mux.HandleFunc("POST /api/session/rename", g(s.rename))
+	mux.HandleFunc("POST /api/session/voice", g(s.sessionVoice))
 	mux.HandleFunc("POST /api/session/revoke", g(s.revoke))
 	mux.HandleFunc("POST /api/ptt/start", g(s.pttStart))
 	mux.HandleFunc("POST /api/ptt/stop", g(s.pttStop))
@@ -428,6 +434,7 @@ type stateResp struct {
 	STTReady             bool          `json:"stt_ready"`
 	TTSReady             bool          `json:"tts_ready"`
 	DialogTimeoutMinutes float64       `json:"dialog_timeout_minutes"`
+	Voices               []string      `json:"voices"`
 	DevInject            bool          `json:"dev_inject"`
 }
 
@@ -441,6 +448,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		STTReady:             s.svc.STTReady(),
 		TTSReady:             s.svc.TTSReady(),
 		DialogTimeoutMinutes: s.svc.DialogTimeout().Minutes(),
+		Voices:               s.controls.InstalledVoices(),
 		DevInject:            s.devInj,
 	})
 }
@@ -606,6 +614,18 @@ func (s *Server) rename(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) sessionVoice(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID    string `json:"id"`
+		Voice string `json:"voice"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	s.reg.SetVoice(body.ID, body.Voice)
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

@@ -42,11 +42,19 @@ func NewPiperTTS(bin, voice string, play player) (*PiperTTS, error) {
 	return &PiperTTS{bin: path, voice: voice, play: play}, nil
 }
 
-// Speak synthesizes text to a temp WAV and plays it.
-func (p *PiperTTS) Speak(ctx context.Context, text string) error {
+// Speak synthesizes text to a temp WAV and plays it, using the given voice model
+// (or the configured default when voice is "").
+func (p *PiperTTS) Speak(ctx context.Context, text, voice string) error {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return nil
+	}
+	model := voice
+	if model == "" {
+		model = p.voice
+	}
+	if model == "" {
+		return fmt.Errorf("no piper voice available")
 	}
 	tmp, err := os.CreateTemp("", "aispeech-tts-*.wav")
 	if err != nil {
@@ -56,7 +64,7 @@ func (p *PiperTTS) Speak(ctx context.Context, text string) error {
 	tmp.Close()
 	defer os.Remove(path)
 
-	cmd := exec.CommandContext(ctx, p.bin, "--model", p.voice, "--output_file", path)
+	cmd := exec.CommandContext(ctx, p.bin, "--model", model, "--output_file", path)
 	cmd.Stdin = strings.NewReader(text)
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("piper: %w", err)

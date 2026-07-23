@@ -30,6 +30,7 @@ type Session struct {
 	Name       string    // display name / session-word (user-renamable)
 	Paired     bool      // completed the pairing handshake
 	Browser    string    // bound browser-session cookie (set on pair)
+	Voice      string    // assigned TTS voice model path ("" = default)
 	Connected  time.Time // first seen
 
 	pairFails int // failed pair attempts (rate limiting)
@@ -59,6 +60,7 @@ type Registry struct {
 	mu          sync.Mutex
 	byID        map[string]*Session
 	focusID     string
+	voiceSeq    int          // rotates voice assignment when all are in use
 	notices     []Notice     // ring buffer, newest last
 	transcripts []Transcript // ring buffer, newest last
 }
@@ -239,6 +241,51 @@ func (r *Registry) SetFocus(id string) error {
 	return nil
 }
 
+// Voice returns the TTS voice assigned to a session ("" = default).
+func (r *Registry) Voice(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.byID[id]; s != nil {
+		return s.Voice
+	}
+	return ""
+}
+
+// SetVoice assigns a specific voice to a session (from the UI).
+func (r *Registry) SetVoice(id, voice string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.byID[id]; s != nil {
+		s.Voice = voice
+	}
+}
+
+// AssignVoice gives a session a distinct voice from available, preferring one no
+// other session is using, so agents sound different. No-op once assigned or when
+// no voices are installed.
+func (r *Registry) AssignVoice(id string, available []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.byID[id]
+	if s == nil || s.Voice != "" || len(available) == 0 {
+		return
+	}
+	used := make(map[string]bool)
+	for _, o := range r.byID {
+		if o.ID != id && o.Voice != "" {
+			used[o.Voice] = true
+		}
+	}
+	for _, v := range available {
+		if !used[v] {
+			s.Voice = v
+			return
+		}
+	}
+	s.Voice = available[r.voiceSeq%len(available)] // all in use: rotate
+	r.voiceSeq++
+}
+
 // Rename changes a session's display name / session-word.
 func (r *Registry) Rename(id, name string) error {
 	name = strings.TrimSpace(name)
@@ -265,6 +312,7 @@ type SessionView struct {
 	Paired     bool   `json:"paired"`
 	Listening  bool   `json:"listening"`
 	Focused    bool   `json:"focused"`
+	Voice      string `json:"voice"`
 }
 
 // Get returns a locked snapshot of one session.
@@ -282,6 +330,7 @@ func (r *Registry) Get(id string) (SessionView, bool) {
 		Paired:     s.Paired,
 		Listening:  s.listen != nil,
 		Focused:    s.ID == r.focusID,
+		Voice:      s.Voice,
 	}, true
 }
 
@@ -299,6 +348,7 @@ func (r *Registry) Snapshot() ([]SessionView, []Notice, []Transcript) {
 			Paired:     s.Paired,
 			Listening:  s.listen != nil,
 			Focused:    s.ID == r.focusID,
+			Voice:      s.Voice,
 		})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })

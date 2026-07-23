@@ -159,8 +159,10 @@ Speech-to-text and text-to-speech run **locally**, with no cloud dependency.
 
 - `speak()` voices **terse, agent-chosen** text — not everything printed. The
   tool description instructs brevity; a hard character cap (config) enforces it.
-- Concurrent `speak()` calls are **serialized FIFO** — one audio output can't
-  play two replies at once.
+- Concurrent `speak()`/`play_sound()` calls are **serialized FIFO** — one audio
+  output can't play two things at once.
+- Each session gets a **distinct TTS voice** (auto-assigned from installed piper
+  voices, overridable per session in the UI) so different agents sound different.
 - The speaker row has a **mute** toggle (click the speaker icon; persisted across
   restarts, so a reload never blares) and a **pause/resume** control that cuts
   the current utterance and holds further output. Volume and mute apply live,

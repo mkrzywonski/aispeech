@@ -32,7 +32,7 @@ func TestProxyBridge(t *testing.T) {
 	reg := session.New()
 	svc := engine.New(reg, nil, nil, nil, time.Minute, 600)
 	store := authz.NewStore(time.Minute)
-	ts := httptest.NewServer(mcpserver.NewHandler(reg, svc, store, mcpserver.Options{
+	ts := httptest.NewServer(mcpserver.NewHandler(reg, svc, store, nil, mcpserver.Options{
 		DefaultListenTimeout: 5 * time.Second, MaxListenTimeout: time.Minute,
 	}))
 	defer ts.Close()
