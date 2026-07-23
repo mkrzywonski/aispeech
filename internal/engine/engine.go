@@ -82,10 +82,10 @@ type Service struct {
 	tts   Speaker
 	sound SoundPlayer // nil when no audio backend
 
-	// speakQ serializes synthesis and playback. A single audio output cannot
-	// safely play two agent replies at once; channel order is the FIFO order in
-	// which requests are accepted by Speak.
-	speakQ chan speakRequest
+	// playQ serializes all audio output (speech and sounds) in FIFO order. A
+	// single output device cannot safely play two things at once; channel order
+	// is the order in which jobs are accepted by Speak/PlaySound.
+	playQ chan playJob
 
 	mu         sync.Mutex
 	mode       ListenMode
@@ -94,15 +94,15 @@ type Service struct {
 	lastActive time.Time
 }
 
-// speakRequest is one queued speak() call. done is buffered so a caller that
-// disconnects while waiting never stalls the playback worker.
-type speakRequest struct {
+// playJob is one queued playback (a spoken reply or a sound). done is buffered
+// so a caller that disconnects while waiting never stalls the playback worker.
+type playJob struct {
 	ctx  context.Context
-	text string
+	run  func(context.Context) error
 	done chan error
 }
 
-const speakQueueCapacity = 32
+const playQueueCapacity = 32
 
 // New builds a Service. Any nil engine is replaced with a null implementation.
 func New(reg *session.Registry, rec Recorder, stt Transcriber, tts Speaker, dialogTimeout time.Duration, speakCap int) *Service {
@@ -122,9 +122,9 @@ func New(reg *session.Registry, rec Recorder, stt Transcriber, tts Speaker, dial
 		tts:      tts,
 		dialogTO: dialogTimeout,
 		speakCap: speakCap,
-		speakQ:   make(chan speakRequest, speakQueueCapacity),
+		playQ:    make(chan playJob, playQueueCapacity),
 	}
-	go s.speakLoop()
+	go s.playLoop()
 	return s
 }
 
@@ -180,7 +180,8 @@ func (s *Service) SetSounds(p SoundPlayer) {
 	s.engMu.Unlock()
 }
 
-// PlaySound plays a built-in sound or a WAV file, returning a label for it.
+// PlaySound plays a built-in sound or a WAV file, returning a label for it. Like
+// Speak, it goes through the FIFO queue so a sound never overlaps a spoken reply.
 func (s *Service) PlaySound(ctx context.Context, name, file string) (string, error) {
 	s.engMu.RLock()
 	p := s.sound
@@ -188,7 +189,13 @@ func (s *Service) PlaySound(ctx context.Context, name, file string) (string, err
 	if p == nil {
 		return "", ErrUnavailable
 	}
-	return p.PlaySound(ctx, name, file)
+	var label string
+	err := s.enqueue(ctx, func(c context.Context) error {
+		l, e := p.PlaySound(c, name, file)
+		label = l
+		return e
+	})
+	return label, err
 }
 
 func (s *Service) transcriber() Transcriber {
@@ -297,38 +304,43 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 // Speak enforces the character cap and queues synthesis/playback in FIFO order.
 // It returns after this utterance has completed (or failed), so MCP callers can
 // accurately report whether their reply was spoken. The bounded queue provides
-// backpressure instead of allowing concurrent TTS jobs to overlap.
+// backpressure instead of allowing concurrent audio jobs to overlap.
 func (s *Service) Speak(ctx context.Context, text string) (spoken int, truncated bool, err error) {
 	if s.speakCap > 0 && len(text) > s.speakCap {
 		text = text[:s.speakCap]
 		truncated = true
 	}
-	req := speakRequest{ctx: ctx, text: text, done: make(chan error, 1)}
-	select {
-	case s.speakQ <- req:
-	case <-ctx.Done():
-		return 0, truncated, ctx.Err()
-	}
-	select {
-	case err := <-req.done:
-		if err != nil {
-			return 0, truncated, err
-		}
-	case <-ctx.Done():
-		return 0, truncated, ctx.Err()
+	if err := s.enqueue(ctx, func(c context.Context) error { return s.speaker().Speak(c, text) }); err != nil {
+		return 0, truncated, err
 	}
 	return len(text), truncated, nil
 }
 
-func (s *Service) speakLoop() {
-	for req := range s.speakQ {
-		// A disconnected MCP client should not leave stale speech in the queue.
-		if err := req.ctx.Err(); err != nil {
-			req.done <- err
+// enqueue submits a playback job to the FIFO queue and waits for it to finish,
+// so speech and sounds never overlap and play in call order.
+func (s *Service) enqueue(ctx context.Context, run func(context.Context) error) error {
+	job := playJob{ctx: ctx, run: run, done: make(chan error, 1)}
+	select {
+	case s.playQ <- job:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	select {
+	case err := <-job.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *Service) playLoop() {
+	for job := range s.playQ {
+		// A disconnected MCP client should not leave stale jobs in the queue.
+		if err := job.ctx.Err(); err != nil {
+			job.done <- err
 			continue
 		}
-		err := s.speaker().Speak(req.ctx, req.text)
-		req.done <- err
+		job.done <- job.run(job.ctx)
 	}
 }
 
