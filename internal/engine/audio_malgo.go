@@ -29,6 +29,7 @@ type AudioContext struct {
 	inGain   atomic.Uint64 // float64 bits: capture gain
 	micLevel atomic.Uint64 // float64 bits: latest mic-test RMS (0..1)
 	muted    atomic.Bool   // silences playback (persisted; independent of volume)
+	paused   atomic.Bool   // suppress playback entirely; cuts current, holds future
 
 	playMu   sync.Mutex // guards the active playback device
 	playDev  *malgo.Device
@@ -75,6 +76,19 @@ func (a *AudioContext) SetMuted(m bool) { a.muted.Store(m) }
 
 // Muted reports whether playback is muted.
 func (a *AudioContext) Muted() bool { return a.muted.Load() }
+
+// SetPaused pauses or resumes speech output. Pausing cuts the current utterance
+// and suppresses further playback until resumed; unlike mute, paused audio does
+// not play at all. Not persisted (a transient "hold the voice" control).
+func (a *AudioContext) SetPaused(p bool) {
+	a.paused.Store(p)
+	if p {
+		a.StopPlayback()
+	}
+}
+
+// Paused reports whether speech output is paused.
+func (a *AudioContext) Paused() bool { return a.paused.Load() }
 
 // StopPlayback interrupts the currently-playing sound (e.g. a TTS utterance).
 func (a *AudioContext) StopPlayback() {
@@ -150,8 +164,8 @@ func (a *AudioContext) deviceNames(kind malgo.DeviceType) []string {
 // finishes or is interrupted by StopPlayback. Output volume and mute are applied
 // live in the callback, so changing them takes effect mid-utterance.
 func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
-	if len(pcm) == 0 {
-		return nil
+	if len(pcm) == 0 || a.paused.Load() {
+		return nil // paused: drop this utterance rather than play it
 	}
 	// Store raw (unscaled) samples; gain/mute are applied per-callback.
 	buf := make([]byte, len(pcm)*4)

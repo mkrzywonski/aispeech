@@ -33,8 +33,11 @@
   .pending .code { font-family: ui-monospace, monospace; font-size: 1.2rem; letter-spacing: .14em; background: #f5a62333; padding: .15rem .5rem; border-radius: 6px; }
   .pending .who { font-weight: 600; }
 
-  .ptt { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap;
+  .ptt { display: flex; flex-direction: column; gap: .7rem;
          padding: 1rem; border: 1px solid #8883; border-radius: 12px; background: #8880; }
+  .ptt-row { display: flex; gap: .6rem; align-items: center; flex-wrap: wrap; }
+  .iconbtn { display: inline-flex; align-items: center; justify-content: center; padding: 5px; border: 1px solid #8888; border-radius: 7px; background: #8881; color: inherit; cursor: pointer; }
+  .iconbtn.active { border-color: #e5484d; color: #e5484d; }
   .mic { display: inline-flex; align-items: center; }
   .mic svg { color: #888; }
   .mic.hot svg { color: #e5484d; }
@@ -111,6 +114,7 @@
 
 <!-- PTT + sessions: primary -->
 <div class="ptt">
+  <div class="ptt-row">
   <span id="mic" class="mic" role="status" aria-live="polite" aria-label="Microphone off" title="Microphone off">
     <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <rect x="9" y="3" width="6" height="10" rx="3" fill="currentColor" stroke="none"></rect>
@@ -121,10 +125,14 @@
     </svg>
   </span>
   <button class="primary big" id="ptt">Start listening</button>
-  <button id="stopspk" title="Interrupt the current spoken reply">Stop speaking</button>
   <label class="idle">Stop listening after <input type="number" id="idlemin" min="0.25" step="0.25"> minutes idle</label>
-  <span class="volwrap"><button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">🔊</button><input type="range" id="vol" min="0" max="2" step="0.05" title="Speaker volume"><span class="lvl" id="volv"></span></span>
   <span class="cap">Space toggles listening.</span>
+  </div>
+  <div class="ptt-row">
+  <button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">🔊</button>
+  <input type="range" id="vol" min="0" max="2" step="0.05" title="Speaker volume"><span class="lvl" id="volv"></span>
+  <button id="pausebtn" class="iconbtn" aria-label="Pause speaking" title="Pause speaking"></button>
+  </div>
 </div>
 
 <h2>Sessions</h2>
@@ -244,20 +252,32 @@ $('devtext').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('devs
 async function postAudio(u) { await fetch('/api/audio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(u) }); }
 $('in').onchange = (e) => postAudio({ input_device: e.target.value });
 $('out').onchange = (e) => postAudio({ output_device: e.target.value });
-let muted = false;
 $('vol').oninput = (e) => { $('volv').textContent = fmtPct(e.target.value); };
 $('vol').onchange = (e) => postAudio({ volume: parseFloat(e.target.value) }); // does not unmute
+const PAUSE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
+const PLAY_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5v14l12-7z"/></svg>';
+let muted = false, paused = false;
 $('spk').onclick = () => { muted = !muted; applyMuteUI(); postAudio({ muted }); };
-$('stopspk').onclick = () => fetch('/api/audio/stop-speaking', { method: 'POST' });
+$('pausebtn').onclick = () => {
+  paused = !paused; applyPauseUI();
+  fetch('/api/audio/pause', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ paused }) });
+};
 function applyMuteUI() {
   $('spk').classList.toggle('muted', muted);
   $('spk').setAttribute('aria-pressed', String(muted));
   $('spk').title = muted ? 'Unmute' : 'Mute';
   $('spk').setAttribute('aria-label', muted ? 'Unmute speaker' : 'Mute speaker');
 }
+function applyPauseUI() {
+  $('pausebtn').innerHTML = paused ? PLAY_ICON : PAUSE_ICON;
+  $('pausebtn').classList.toggle('active', paused);
+  $('pausebtn').title = paused ? 'Resume speaking' : 'Pause speaking';
+  $('pausebtn').setAttribute('aria-label', paused ? 'Resume speaking' : 'Pause speaking');
+}
 function setAudioLevels(a) {
   if (document.activeElement !== $('vol')) { $('vol').value = a.volume; $('volv').textContent = fmtPct(a.volume); }
   muted = !!a.muted; applyMuteUI();
+  paused = !!a.paused; applyPauseUI();
 }
 async function initVolume() {
   try { setAudioLevels(await (await fetch('/api/audio')).json()); } catch (e) {}

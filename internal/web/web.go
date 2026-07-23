@@ -29,7 +29,8 @@ type AudioControl interface {
 	SetInputGain(float64)
 	SetMuted(bool)
 	Muted() bool
-	StopPlayback()
+	SetPaused(bool)
+	Paused() bool
 	TestSpeaker() error
 	StartMicTest() error
 	StopMicTest() error
@@ -211,6 +212,7 @@ type audioState struct {
 	Volume       float64  `json:"volume"`
 	Gain         float64  `json:"gain"`
 	Muted        bool     `json:"muted"`
+	Paused       bool     `json:"paused"`
 }
 
 func (c *Controls) state() audioState {
@@ -227,6 +229,7 @@ func (c *Controls) state() audioState {
 		st.Available = true
 		st.Input = c.audio.CaptureDevices()
 		st.Output = c.audio.PlaybackDevices()
+		st.Paused = c.audio.Paused()
 	}
 	return st
 }
@@ -275,9 +278,9 @@ func (c *Controls) apply(u audioUpdate) error {
 	return c.save()
 }
 
-func (c *Controls) stopPlayback() {
+func (c *Controls) setPaused(p bool) {
 	if c.audio != nil {
-		c.audio.StopPlayback()
+		c.audio.SetPaused(p)
 	}
 }
 
@@ -336,7 +339,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/audio", s.audioGet)
 	mux.HandleFunc("POST /api/audio", s.audioSet)
 	mux.HandleFunc("POST /api/audio/test-speaker", s.testSpeaker)
-	mux.HandleFunc("POST /api/audio/stop-speaking", s.stopSpeaking)
+	mux.HandleFunc("POST /api/audio/pause", s.pauseSpeaking)
 	mux.HandleFunc("POST /api/mic-test/start", s.micTestStart)
 	mux.HandleFunc("POST /api/mic-test/stop", s.micTestStop)
 	mux.HandleFunc("GET /api/mic-test/level", s.micTestLevel)
@@ -420,8 +423,14 @@ func (s *Server) testSpeaker(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
-func (s *Server) stopSpeaking(w http.ResponseWriter, r *http.Request) {
-	s.controls.stopPlayback()
+func (s *Server) pauseSpeaking(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Paused bool `json:"paused"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	s.controls.setPaused(body.Paused)
 	writeJSON(w, map[string]bool{"ok": true})
 }
 
