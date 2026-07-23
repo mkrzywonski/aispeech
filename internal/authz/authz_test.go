@@ -68,26 +68,33 @@ func TestTokensAreDistinct(t *testing.T) {
 	_ = c2
 }
 
-func TestAllowedHostsAndGuard(t *testing.T) {
-	allowed := AllowedHosts("127.0.0.1:7071")
-	for _, h := range []string{"127.0.0.1:7071", "localhost:7071", "[::1]:7071"} {
-		if !allowed[h] {
+func TestHostAllowerAndGuard(t *testing.T) {
+	allow := NewAllower("127.0.0.1:7071", []string{"mybox.local"})
+	// Loopback (any port, e.g. an SSH tunnel), IP literals, and trusted hosts pass.
+	for _, h := range []string{
+		"127.0.0.1:7071", "localhost:7071", "localhost:7072", "[::1]:7072",
+		"192.168.1.5:7071", "10.0.0.2:9999", "mybox.local:1234",
+	} {
+		if !allow(h) {
 			t.Fatalf("host %q should be allowed", h)
 		}
 	}
-	if allowed["evil.com:7071"] {
-		t.Fatal("attacker host allowed")
+	// Attacker domains (DNS rebinding) are blocked.
+	for _, h := range []string{"evil.com:7071", "evil.com", "attacker.example:7072"} {
+		if allow(h) {
+			t.Fatalf("host %q should be blocked", h)
+		}
 	}
 
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) })
-	g := HostGuard(next, allowed)
+	g := HostGuard(next, allow)
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("GET", "http://localhost:7071/", nil)
-	req.Host = "localhost:7071"
+	req := httptest.NewRequest("GET", "http://localhost:7072/", nil)
+	req.Host = "localhost:7072" // tunneled port
 	g.ServeHTTP(rec, req)
 	if rec.Code != 200 {
-		t.Fatalf("allowed host rejected: %d", rec.Code)
+		t.Fatalf("tunneled localhost rejected: %d", rec.Code)
 	}
 
 	rec = httptest.NewRecorder()
@@ -100,14 +107,17 @@ func TestAllowedHostsAndGuard(t *testing.T) {
 }
 
 func TestOriginAllowed(t *testing.T) {
-	allowed := AllowedHosts("127.0.0.1:7071")
-	if !OriginAllowed("", allowed) {
+	allow := NewAllower("127.0.0.1:7071", nil)
+	if !OriginAllowed("", allow) {
 		t.Fatal("empty origin (curl/MCP) should pass")
 	}
-	if !OriginAllowed("http://localhost:7071", allowed) {
-		t.Fatal("same-origin should pass")
+	if !OriginAllowed("http://localhost:7072", allow) {
+		t.Fatal("same-origin (tunnel port) should pass")
 	}
-	if OriginAllowed("http://evil.com", allowed) {
+	if !OriginAllowed("http://192.168.1.5:7071", allow) {
+		t.Fatal("LAN-IP origin should pass")
+	}
+	if OriginAllowed("http://evil.com", allow) {
 		t.Fatal("cross-origin attacker should fail")
 	}
 }

@@ -124,7 +124,7 @@ func main() {
 	models := engine.NewModelManager(svc, audioCtx)
 	store := modelstore.New(cfg.ResolvedModelsDir())
 	authStore := authz.NewStore(authz.DefaultTokenTTL)
-	allowedHosts := authz.AllowedHosts(bindAddr)
+	allow := authz.NewAllower(bindAddr, cfg.TrustedHosts)
 	controls := web.NewControls(web.Deps{
 		Audio:      audioControl,
 		Svc:        svc,
@@ -137,7 +137,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	web.New(reg, svc, controls, authStore, allowedHosts, *devInject).Routes(mux)
+	web.New(reg, svc, controls, authStore, allow, *devInject).Routes(mux)
 	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore,
 		func() []string { return store.Installed(modelstore.Piper) },
 		mcpserver.Options{
@@ -148,7 +148,7 @@ func main() {
 
 	// Reject requests whose Host isn't the loopback/bound authority — the
 	// primary defense against DNS-rebinding and malicious web pages.
-	handler := authz.HostGuard(mux, allowedHosts)
+	handler := authz.HostGuard(mux, allow)
 	srv := &http.Server{Addr: bindAddr, Handler: handler}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)

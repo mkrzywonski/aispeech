@@ -11,6 +11,9 @@ import (
 type Config struct {
 	// Network.
 	Addr string `json:"addr"` // MCP + UI bind address, e.g. 127.0.0.1:7071
+	// TrustedHosts are extra Host/Origin values to accept beyond loopback, any
+	// IP literal, and this machine's hostname (e.g. a custom local domain).
+	TrustedHosts []string `json:"trusted_hosts"`
 
 	// Audio devices (empty = system default).
 	InputDevice  string `json:"input_device"`

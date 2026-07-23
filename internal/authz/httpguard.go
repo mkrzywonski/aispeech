@@ -4,38 +4,65 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"strings"
 )
 
-// AllowedHosts returns the set of acceptable Host/Origin authorities for a hub
-// bound at bindAddr. It always permits the loopback names on the bound port;
-// when bindAddr names a specific host (e.g. a WSL-reachable IP) that authority
-// is permitted too. A DNS-rebinding attacker's page sends its own hostname in
-// the Host header, which will not be in this set.
-func AllowedHosts(bindAddr string) map[string]bool {
-	host, port, err := net.SplitHostPort(bindAddr)
-	if err != nil {
-		port = bindAddr // best effort
-	}
-	set := map[string]bool{}
+// Allower reports whether a Host/Origin authority (host or host:port) is
+// acceptable. It permits loopback names, any IP literal, this machine's
+// hostname, and configured trusted hosts. That blocks DNS-rebinding (which
+// arrives with an attacker *domain* in the Host header) while still allowing
+// legitimate access via localhost, a LAN IP, an SSH-tunnel port, or the host's
+// own name.
+type Allower func(authority string) bool
+
+// NewAllower builds an Allower for a hub bound at bindAddr, plus any extra
+// trusted hostnames (from config).
+func NewAllower(bindAddr string, trusted []string) Allower {
+	hosts := map[string]bool{}
 	add := func(h string) {
-		if h != "" {
-			set[net.JoinHostPort(h, port)] = true
+		h = strings.ToLower(strings.Trim(h, "[]"))
+		if h != "" && h != "0.0.0.0" && h != "::" {
+			hosts[h] = true
 		}
 	}
-	add("127.0.0.1")
-	add("localhost")
-	add("::1")
-	if host != "" && host != "0.0.0.0" && host != "::" {
-		add(host)
+	if h, _, err := net.SplitHostPort(bindAddr); err == nil {
+		add(h)
 	}
-	return set
+	if hn, err := os.Hostname(); err == nil {
+		add(hn)
+	}
+	for _, t := range trusted {
+		if h, _, err := net.SplitHostPort(t); err == nil {
+			add(h)
+		} else {
+			add(t)
+		}
+	}
+	return func(authority string) bool {
+		h, _, err := net.SplitHostPort(authority)
+		if err != nil {
+			h = authority
+		}
+		h = strings.ToLower(strings.Trim(h, "[]"))
+		switch {
+		case h == "":
+			return false
+		case h == "localhost" || h == "127.0.0.1" || h == "::1":
+			return true
+		case net.ParseIP(h) != nil: // any IP literal (LAN IP, etc.)
+			return true
+		default:
+			return hosts[h] // machine hostname or a configured trusted host
+		}
+	}
 }
 
-// HostGuard rejects any request whose Host authority is not allowed. This is the
+// HostGuard rejects any request whose Host authority is not allowed — the
 // primary defense against DNS rebinding for a localhost service.
-func HostGuard(next http.Handler, allowed map[string]bool) http.Handler {
+func HostGuard(next http.Handler, allow Allower) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !allowed[r.Host] {
+		if !allow(r.Host) {
 			http.Error(w, "forbidden host", http.StatusForbidden)
 			return
 		}
@@ -44,10 +71,10 @@ func HostGuard(next http.Handler, allowed map[string]bool) http.Handler {
 }
 
 // OriginAllowed reports whether an Origin header value is acceptable. An empty
-// Origin (non-browser clients such as curl or the MCP transport) is allowed
-// here; browser cross-origin requests carry an Origin that must match the
-// allowlist. Mutating UI routes combine this with a required browser session.
-func OriginAllowed(origin string, allowed map[string]bool) bool {
+// Origin (non-browser clients such as curl or the MCP transport) passes; a
+// browser cross-origin request carries an Origin that must satisfy the same
+// allowlist.
+func OriginAllowed(origin string, allow Allower) bool {
 	if origin == "" {
 		return true
 	}
@@ -55,5 +82,5 @@ func OriginAllowed(origin string, allowed map[string]bool) bool {
 	if err != nil || u.Host == "" {
 		return false
 	}
-	return allowed[u.Host]
+	return allow(u.Host)
 }

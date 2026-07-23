@@ -332,14 +332,14 @@ type Server struct {
 	svc      *engine.Service
 	controls *Controls
 	store    *authz.Store
-	allowed  map[string]bool
+	allow    authz.Allower
 	devInj   bool
 }
 
 // New returns a web Server. devInject enables the dev-only transcript injection
 // endpoint used to exercise routing without a microphone.
-func New(reg *session.Registry, svc *engine.Service, controls *Controls, store *authz.Store, allowed map[string]bool, devInject bool) *Server {
-	return &Server{reg: reg, svc: svc, controls: controls, store: store, allowed: allowed, devInj: devInject}
+func New(reg *session.Registry, svc *engine.Service, controls *Controls, store *authz.Store, allow authz.Allower, devInject bool) *Server {
+	return &Server{reg: reg, svc: svc, controls: controls, store: store, allow: allow, devInj: devInject}
 }
 
 // Routes registers the UI and API handlers on mux. Mutating routes are wrapped
@@ -382,7 +382,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 // that scripts the browser flow — see the threat model in the design docs.
 func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if !authz.OriginAllowed(r.Header.Get("Origin"), s.allowed) {
+		if !authz.OriginAllowed(r.Header.Get("Origin"), s.allow) {
 			http.Error(w, "bad origin", http.StatusForbidden)
 			return
 		}
