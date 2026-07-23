@@ -50,8 +50,9 @@
   .ptt .idle { opacity: .85; }
   .ptt .idle input { font: inherit; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
   .volwrap { display: inline-flex; align-items: center; gap: .4rem; }
-  .spk { font-size: 1.15rem; line-height: 1; padding: 3px; border: 2px solid transparent; border-radius: 50%; background: none; cursor: pointer; }
-  .spk.muted { border-color: #e5484d; }
+  .spk { padding: 2px; border: none; background: none; cursor: pointer; color: inherit; display: inline-flex; align-items: center; }
+  .spk .slash { display: none; }
+  .spk.muted .slash { display: inline; }
 
   .tablewrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
@@ -129,7 +130,14 @@
   <span class="cap">Space toggles listening.</span>
   </div>
   <div class="ptt-row">
-  <button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">🔊</button>
+  <button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">
+    <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M3 10v4h3l4 4V6L6 10H3z" fill="currentColor" stroke="none"></path>
+      <path d="M15 9.5a4 4 0 0 1 0 5"></path>
+      <path d="M18 7a8 8 0 0 1 0 10"></path>
+      <g class="slash" stroke="#e5484d"><circle cx="12" cy="12" r="11" fill="none"></circle><line x1="4.5" y1="4.5" x2="19.5" y2="19.5"></line></g>
+    </svg>
+  </button>
   <input type="range" id="vol" min="0" max="2" step="0.05" title="Speaker volume"><span class="lvl" id="volv"></span>
   <button id="pausebtn" class="iconbtn" aria-label="Pause speaking" title="Pause speaking"></button>
   </div>
