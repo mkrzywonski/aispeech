@@ -47,7 +47,8 @@
   .ptt .idle { opacity: .85; }
   .ptt .idle input { font: inherit; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
   .volwrap { display: inline-flex; align-items: center; gap: .4rem; }
-  #mute.active { color: #e5484d; border-color: #e5484d; }
+  .spk { font-size: 1.15rem; line-height: 1; padding: 3px; border: 2px solid transparent; border-radius: 50%; background: none; cursor: pointer; }
+  .spk.muted { border-color: #e5484d; }
 
   .tablewrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
@@ -122,7 +123,7 @@
   <button class="primary big" id="ptt">Start listening</button>
   <button id="stopspk" title="Interrupt the current spoken reply">Stop speaking</button>
   <label class="idle">Stop listening after <input type="number" id="idlemin" min="0.25" step="0.25"> minutes idle</label>
-  <span class="volwrap" title="Speaker volume">🔊 <input type="range" id="vol" min="0" max="2" step="0.05"><span class="lvl" id="volv"></span> <button id="mute">Mute</button></span>
+  <span class="volwrap"><button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">🔊</button><input type="range" id="vol" min="0" max="2" step="0.05" title="Speaker volume"><span class="lvl" id="volv"></span></span>
   <span class="cap">Space toggles listening.</span>
 </div>
 
@@ -246,11 +247,13 @@ $('out').onchange = (e) => postAudio({ output_device: e.target.value });
 let muted = false;
 $('vol').oninput = (e) => { $('volv').textContent = fmtPct(e.target.value); };
 $('vol').onchange = (e) => postAudio({ volume: parseFloat(e.target.value) }); // does not unmute
-$('mute').onclick = () => { muted = !muted; applyMuteUI(); postAudio({ muted }); };
+$('spk').onclick = () => { muted = !muted; applyMuteUI(); postAudio({ muted }); };
 $('stopspk').onclick = () => fetch('/api/audio/stop-speaking', { method: 'POST' });
 function applyMuteUI() {
-  $('mute').textContent = muted ? 'Muted' : 'Mute';
-  $('mute').classList.toggle('active', muted);
+  $('spk').classList.toggle('muted', muted);
+  $('spk').setAttribute('aria-pressed', String(muted));
+  $('spk').title = muted ? 'Unmute' : 'Mute';
+  $('spk').setAttribute('aria-label', muted ? 'Unmute speaker' : 'Mute speaker');
 }
 function setAudioLevels(a) {
   if (document.activeElement !== $('vol')) { $('vol').value = a.volume; $('volv').textContent = fmtPct(a.volume); }
