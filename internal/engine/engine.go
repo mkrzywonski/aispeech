@@ -75,12 +75,27 @@ type Service struct {
 	stt   Transcriber
 	tts   Speaker
 
+	// speakQ serializes synthesis and playback. A single audio output cannot
+	// safely play two agent replies at once; channel order is the FIFO order in
+	// which requests are accepted by Speak.
+	speakQ chan speakRequest
+
 	mu         sync.Mutex
 	mode       ListenMode
 	cancel     context.CancelFunc
 	dialogTO   time.Duration
 	lastActive time.Time
 }
+
+// speakRequest is one queued speak() call. done is buffered so a caller that
+// disconnects while waiting never stalls the playback worker.
+type speakRequest struct {
+	ctx  context.Context
+	text string
+	done chan error
+}
+
+const speakQueueCapacity = 32
 
 // New builds a Service. Any nil engine is replaced with a null implementation.
 func New(reg *session.Registry, rec Recorder, stt Transcriber, tts Speaker, dialogTimeout time.Duration, speakCap int) *Service {
@@ -93,7 +108,17 @@ func New(reg *session.Registry, rec Recorder, stt Transcriber, tts Speaker, dial
 	if tts == nil {
 		tts = NullSpeaker{}
 	}
-	return &Service{reg: reg, rec: rec, stt: stt, tts: tts, dialogTO: dialogTimeout, speakCap: speakCap}
+	s := &Service{
+		reg:      reg,
+		rec:      rec,
+		stt:      stt,
+		tts:      tts,
+		dialogTO: dialogTimeout,
+		speakCap: speakCap,
+		speakQ:   make(chan speakRequest, speakQueueCapacity),
+	}
+	go s.speakLoop()
+	return s
 }
 
 // Mode reports the current listening mode.
@@ -244,17 +269,42 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 	}
 }
 
-// Speak enforces the character cap and synthesizes speech. Returns the number of
-// characters spoken and whether the text was truncated.
+// Speak enforces the character cap and queues synthesis/playback in FIFO order.
+// It returns after this utterance has completed (or failed), so MCP callers can
+// accurately report whether their reply was spoken. The bounded queue provides
+// backpressure instead of allowing concurrent TTS jobs to overlap.
 func (s *Service) Speak(ctx context.Context, text string) (spoken int, truncated bool, err error) {
 	if s.speakCap > 0 && len(text) > s.speakCap {
 		text = text[:s.speakCap]
 		truncated = true
 	}
-	if err := s.speaker().Speak(ctx, text); err != nil {
-		return 0, truncated, err
+	req := speakRequest{ctx: ctx, text: text, done: make(chan error, 1)}
+	select {
+	case s.speakQ <- req:
+	case <-ctx.Done():
+		return 0, truncated, ctx.Err()
+	}
+	select {
+	case err := <-req.done:
+		if err != nil {
+			return 0, truncated, err
+		}
+	case <-ctx.Done():
+		return 0, truncated, ctx.Err()
 	}
 	return len(text), truncated, nil
+}
+
+func (s *Service) speakLoop() {
+	for req := range s.speakQ {
+		// A disconnected MCP client should not leave stale speech in the queue.
+		if err := req.ctx.Err(); err != nil {
+			req.done <- err
+			continue
+		}
+		err := s.speaker().Speak(req.ctx, req.text)
+		req.done <- err
+	}
 }
 
 // InjectTranscript feeds text as if it had been transcribed. Used only by the
