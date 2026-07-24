@@ -20,9 +20,10 @@ type Config struct {
 	OutputDevice string `json:"output_device"`
 
 	// STT.
-	WhisperBin   string `json:"whisper_bin"`   // path to whisper.cpp binary
-	WhisperModel string `json:"whisper_model"` // path to a ggml model
-	Language     string `json:"language"`      // e.g. "en", "auto"
+	WhisperBin           string `json:"whisper_bin"`            // path to whisper.cpp binary
+	WhisperModel         string `json:"whisper_model"`          // path to a ggml model
+	Language             string `json:"language"`               // e.g. "en", "auto"
+	STTPauseMilliseconds int    `json:"stt_pause_milliseconds"` // silence required to end an utterance
 
 	// TTS.
 	PiperBin   string `json:"piper_bin"`   // path to piper binary
@@ -37,8 +38,9 @@ type Config struct {
 	Muted        bool    `json:"muted"`         // silence playback (persists across restarts)
 
 	// Interaction.
-	DialogTimeoutSeconds int `json:"dialog_timeout_seconds"` // PTT dialog idle timeout
-	SpeakCharCap         int `json:"speak_char_cap"`         // hard cap on speak() text
+	DialogTimeoutSeconds int  `json:"dialog_timeout_seconds"` // PTT dialog idle timeout
+	DialogTimeoutEnabled bool `json:"dialog_timeout_enabled"` // stop PTT dialog after idle timeout
+	SpeakCharCap         int  `json:"speak_char_cap"`         // hard cap on speak() text
 }
 
 // Default returns a config populated with sensible defaults.
@@ -48,9 +50,11 @@ func Default() Config {
 		Language:             "en",
 		WhisperBin:           "whisper-cli",
 		PiperBin:             "piper",
+		STTPauseMilliseconds: 1400,
 		OutputVolume:         1.0,
 		InputGain:            1.0,
 		DialogTimeoutSeconds: 180,
+		DialogTimeoutEnabled: true,
 		SpeakCharCap:         600,
 	}
 }

@@ -12,6 +12,7 @@ type BuildOptions struct {
 	WhisperBin, WhisperModel, Language string
 	PiperBin, PiperVoice               string
 	DialogTimeout                      time.Duration
+	STTPause                           time.Duration
 	SpeakCap                           int
 }
 
@@ -34,7 +35,9 @@ func Build(reg *session.Registry, o BuildOptions) (svc *Service, devices *AudioC
 		return svc, nil, cleanup, warnings
 	}
 	cleanup = ac.Close
-	rec = NewMalgoRecorder(ac)
+	mr := NewMalgoRecorder(ac)
+	mr.SetPauseDuration(o.STTPause)
+	rec = mr
 
 	if w, err := NewWhisperSTT(o.WhisperBin, o.WhisperModel, o.Language); err != nil {
 		warnings = append(warnings, fmt.Sprintf("STT disabled: %v", err))

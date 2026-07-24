@@ -27,7 +27,7 @@ type Utterance struct {
 
 // Session is one connected agent.
 type Session struct {
-	ID          string    // MCP connection id (identity)
+	ID         string    // MCP connection id (identity)
 	ClientName string    // from MCP clientInfo, e.g. "claude"
 	Name       string    // display name / session-word (user-renamable)
 	Paired     bool      // completed the pairing handshake
@@ -60,11 +60,11 @@ type LogEntry struct {
 
 // Registry is the concurrency-safe source of truth for sessions and focus.
 type Registry struct {
-	mu          sync.Mutex
-	byID        map[string]*Session
-	focusID     string
-	voiceSeq    int        // rotates voice assignment when all are in use
-	log         []LogEntry // unified activity log ring buffer, newest last
+	mu       sync.Mutex
+	byID     map[string]*Session
+	focusID  string
+	voiceSeq int        // rotates voice assignment when all are in use
+	log      []LogEntry // unified activity log ring buffer, newest last
 }
 
 // New returns an empty Registry.
@@ -199,11 +199,13 @@ func (r *Registry) Listen(ctx context.Context, id string, timeout time.Duration)
 // session — or drops it if there is no focus or the target is not currently
 // listening (no buffering, by design). Each utterance and its outcome are
 // recorded as a transcript for the UI; routing is not duplicated into the
-// activity log.
-func (r *Registry) Deliver(text string) {
+// activity log. It reports whether a command was actually delivered to a
+// listening, focused session. Focus-only utterances and dropped transcripts do
+// not count as delivery.
+func (r *Registry) Deliver(text string) bool {
 	heard := strings.TrimSpace(text)
 	if heard == "" {
-		return
+		return false
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -216,7 +218,7 @@ func (r *Registry) Deliver(text string) {
 		s := r.byID[id]
 		if strings.TrimSpace(rest) == "" {
 			r.transcriptLocked(heard, s.Name, "focus") // focus switch only
-			return
+			return false
 		}
 		command = strings.TrimSpace(rest)
 	}
@@ -224,15 +226,16 @@ func (r *Registry) Deliver(text string) {
 	focus := r.byID[r.focusID]
 	if focus == nil {
 		r.transcriptLocked(heard, "", "no-session")
-		return
+		return false
 	}
 	if focus.listen == nil {
 		r.transcriptLocked(heard, focus.Name, "dropped")
-		return
+		return false
 	}
 	focus.listen <- Utterance{Text: command, Target: focus.Name}
 	focus.listen = nil
 	r.transcriptLocked(heard, focus.Name, "delivered")
+	return true
 }
 
 // SetFocus selects the focused session from the UI.

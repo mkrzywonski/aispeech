@@ -83,7 +83,10 @@ func NewControls(d Deps) *Controls {
 func (c *Controls) interactionState() map[string]any {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return map[string]any{"dialog_timeout_minutes": float64(c.cfg.DialogTimeoutSeconds) / 60.0}
+	return map[string]any{
+		"dialog_timeout_minutes": float64(c.cfg.DialogTimeoutSeconds) / 60.0,
+		"dialog_timeout_enabled": c.cfg.DialogTimeoutEnabled,
+	}
 }
 
 func (c *Controls) applyInteraction(minutes float64) error {
@@ -95,6 +98,14 @@ func (c *Controls) applyInteraction(minutes float64) error {
 	secs := int(minutes*60 + 0.5)
 	c.cfg.DialogTimeoutSeconds = secs
 	c.svc.SetDialogTimeout(time.Duration(secs) * time.Second)
+	return c.save()
+}
+
+func (c *Controls) setDialogTimeoutEnabled(enabled bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cfg.DialogTimeoutEnabled = enabled
+	c.svc.SetDialogTimeoutEnabled(enabled)
 	return c.save()
 }
 
@@ -129,11 +140,11 @@ type catalogView struct {
 
 type modelsResp struct {
 	engine.ModelStatus
-	ModelsDir        string                    `json:"models_dir"`
-	InstalledWhisper []string                  `json:"installed_whisper"`
-	InstalledPiper   []string                  `json:"installed_piper"`
-	Catalog          []catalogView             `json:"catalog"`
-	Download         modelstore.DownloadState  `json:"download"`
+	ModelsDir        string                   `json:"models_dir"`
+	InstalledWhisper []string                 `json:"installed_whisper"`
+	InstalledPiper   []string                 `json:"installed_piper"`
+	Catalog          []catalogView            `json:"catalog"`
+	Download         modelstore.DownloadState `json:"download"`
 }
 
 func (c *Controls) modelsState() modelsResp {
@@ -210,26 +221,28 @@ func (c *Controls) applyModels(u modelsUpdate) (engine.ModelStatus, error) {
 }
 
 type audioState struct {
-	Available    bool     `json:"available"`
-	Input        []string `json:"input"`
-	Output       []string `json:"output"`
-	InputDevice  string   `json:"input_device"`
-	OutputDevice string   `json:"output_device"`
-	Volume       float64  `json:"volume"`
-	Gain         float64  `json:"gain"`
-	Muted        bool     `json:"muted"`
-	Paused       bool     `json:"paused"`
+	Available            bool     `json:"available"`
+	Input                []string `json:"input"`
+	Output               []string `json:"output"`
+	InputDevice          string   `json:"input_device"`
+	OutputDevice         string   `json:"output_device"`
+	Volume               float64  `json:"volume"`
+	Gain                 float64  `json:"gain"`
+	STTPauseMilliseconds int      `json:"stt_pause_milliseconds"`
+	Muted                bool     `json:"muted"`
+	Paused               bool     `json:"paused"`
 }
 
 func (c *Controls) state() audioState {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := audioState{
-		InputDevice:  c.cfg.InputDevice,
-		OutputDevice: c.cfg.OutputDevice,
-		Volume:       c.cfg.OutputVolume,
-		Gain:         c.cfg.InputGain,
-		Muted:        c.cfg.Muted,
+		InputDevice:          c.cfg.InputDevice,
+		OutputDevice:         c.cfg.OutputDevice,
+		Volume:               c.cfg.OutputVolume,
+		Gain:                 c.cfg.InputGain,
+		STTPauseMilliseconds: int(c.svc.STTPause() / time.Millisecond),
+		Muted:                c.cfg.Muted,
 	}
 	if c.audio != nil {
 		st.Available = true
@@ -241,11 +254,12 @@ func (c *Controls) state() audioState {
 }
 
 type audioUpdate struct {
-	InputDevice  *string  `json:"input_device"`
-	OutputDevice *string  `json:"output_device"`
-	Volume       *float64 `json:"volume"`
-	Gain         *float64 `json:"gain"`
-	Muted        *bool    `json:"muted"`
+	InputDevice          *string  `json:"input_device"`
+	OutputDevice         *string  `json:"output_device"`
+	Volume               *float64 `json:"volume"`
+	Gain                 *float64 `json:"gain"`
+	STTPauseMilliseconds *int     `json:"stt_pause_milliseconds"`
+	Muted                *bool    `json:"muted"`
 }
 
 func (c *Controls) apply(u audioUpdate) error {
@@ -274,6 +288,17 @@ func (c *Controls) apply(u audioUpdate) error {
 		if c.audio != nil {
 			c.audio.SetInputGain(*u.Gain)
 		}
+	}
+	if u.STTPauseMilliseconds != nil {
+		ms := *u.STTPauseMilliseconds
+		if ms < 300 {
+			ms = 300
+		}
+		if ms > 10000 {
+			ms = 10000
+		}
+		c.cfg.STTPauseMilliseconds = ms
+		c.svc.SetSTTPause(time.Duration(ms) * time.Millisecond)
 	}
 	if u.Muted != nil {
 		c.cfg.Muted = *u.Muted
@@ -433,6 +458,7 @@ type stateResp struct {
 	STTReady             bool                  `json:"stt_ready"`
 	TTSReady             bool                  `json:"tts_ready"`
 	DialogTimeoutMinutes float64               `json:"dialog_timeout_minutes"`
+	DialogTimeoutEnabled bool                  `json:"dialog_timeout_enabled"`
 	MicIdleActive        bool                  `json:"mic_idle_active"`
 	MicIdleRemaining     float64               `json:"mic_idle_remaining_seconds"`
 	MicIdleTotal         float64               `json:"mic_idle_total_seconds"`
@@ -450,6 +476,7 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		STTReady:             s.svc.STTReady(),
 		TTSReady:             s.svc.TTSReady(),
 		DialogTimeoutMinutes: s.svc.DialogTimeout().Minutes(),
+		DialogTimeoutEnabled: s.svc.DialogTimeoutEnabled(),
 		MicIdleActive:        active,
 		MicIdleRemaining:     remaining.Seconds(),
 		MicIdleTotal:         total.Seconds(),
@@ -556,14 +583,23 @@ func (s *Server) interactionGet(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) interactionSet(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		DialogTimeoutMinutes float64 `json:"dialog_timeout_minutes"`
+		DialogTimeoutMinutes *float64 `json:"dialog_timeout_minutes"`
+		DialogTimeoutEnabled *bool    `json:"dialog_timeout_enabled"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
-	if err := s.controls.applyInteraction(body.DialogTimeoutMinutes); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	if body.DialogTimeoutMinutes != nil {
+		if err := s.controls.applyInteraction(*body.DialogTimeoutMinutes); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	if body.DialogTimeoutEnabled != nil {
+		if err := s.controls.setDialogTimeoutEnabled(*body.DialogTimeoutEnabled); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	writeJSON(w, s.controls.interactionState())
 }

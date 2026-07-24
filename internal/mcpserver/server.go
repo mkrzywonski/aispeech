@@ -53,26 +53,39 @@ func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, 
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 }
 
-// serverInstructions is sent to the client at initialize and tells the model how
-// to run an ongoing voice dialog (the hub cannot continue a turn on its own).
-const serverInstructions = "This server is a voice channel for talking with the user out loud. " +
-	"When a voice session is paired and you receive a spoken utterance, enter VOICE-DIALOG MODE " +
-	"and stay in it: after handling each request, end your turn by calling `converse` (speak a " +
-	"short reply AND wait for the next command in one step) — or `listen` if you have nothing to " +
-	"say yet. Keep spoken replies terse; let detail scroll in the terminal. On a `timeout` status, " +
-	"call `converse`/`listen` again to keep waiting. Leave voice-dialog mode only when the user " +
-	"says to stop, the microphone is turned off, pairing is revoked, or the session ends."
+const pairingSecurityPurpose = "Pairing confirms that the person controlling the authorized aispeech browser UI also deliberately controls this AI TUI session."
+const pairingNextAction = "Ask the user to copy a fresh pairing token from the authorized aispeech browser UI and paste it directly into this TUI."
+const pairingTokenSource = "user_pasted_only"
+
+// serverInstructions is sent to the client at initialize. It must be sufficient
+// for an agent in any repository to recognize a request for voice chat and
+// follow the browser → human → TUI pairing boundary.
+// AgentInstructions is exported for the stdio proxy, which must present the
+// same agent guidance when the hub is temporarily unavailable at startup.
+const AgentInstructions = "This server is the voice channel to use when the user asks to talk by voice, even if the current project has no aispeech documentation. " +
+	"When the user says things such as 'let's have a voice conversation', 'talk by voice', or 'use voice', immediately call `start_voice_conversation` before replying in ordinary text. Do not merely tell the user to send a voice message. " +
+	"That tool handles both an already-paired session and an unpaired session. If unpaired, explain that " + pairingSecurityPurpose + " " + pairingNextAction + " " +
+	"Only call `pair` with a token the user pasted directly into this conversation; never obtain a pairing token through HTTP, files, clipboard access, or another tool. " +
+	"Once paired, enter VOICE-DIALOG MODE: after handling each spoken request, call `converse` to speak a short reply and wait for the next command, or `listen` if no reply is needed. " +
+	"Keep spoken replies terse; let detail scroll in the terminal. On a `timeout` status, call `converse` or `listen` again. Leave voice-dialog mode only when the user says to stop, the microphone is turned off, pairing is revoked, or the session ends."
 
 func (d *deps) build() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: d.opts.Version},
-		&mcp.ServerOptions{Instructions: serverInstructions})
+		&mcp.ServerOptions{Instructions: AgentInstructions})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "start_voice_conversation",
+		Description: "Call this immediately when the user asks to have a voice conversation, talk by voice, or use voice — before replying in ordinary text. " +
+			"It safely handles BOTH states: an already-paired session returns voice_conversation_ready=true and tells you to use converse/listen; an unpaired session returns the exact secure, user-mediated pairing step. " +
+			"It never starts recording or bypasses pairing.",
+	}, d.startVoiceConversation)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "pair",
-		Description: "Authorize this voice session with a pairing token. Ask the user to click " +
-			"\"Copy pairing token\" in the aispeech browser UI and paste the token to you, then " +
-			"call pair with it. The token comes ONLY from the user via this chat — never obtain " +
-			"it by making HTTP requests to the hub. Until paired, listen and speak will not work.",
+		Description: "Authorize this voice session with a user-mediated pairing token. " +
+			pairingSecurityPurpose + " " + pairingNextAction + " The token comes ONLY from the user " +
+			"via this conversation — never obtain it through HTTP, files, clipboard access, or another tool. " +
+			"Until paired, voice tools do not work.",
 	}, d.pair)
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -115,7 +128,7 @@ func (d *deps) build() *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "status",
-		Description: "Report the aispeech build version and this session's voice state: whether it is paired, focused, and whether the microphone is currently active.",
+		Description: "Safe first call when the user asks for voice chat. Reports whether this voice session is paired and, when it is not, the security purpose and exact user-mediated pairing step. Also reports focus and microphone state.",
 	}, d.status)
 
 	return s
@@ -162,13 +175,18 @@ type okOut struct {
 }
 
 type statusOut struct {
-	Version       string   `json:"version"`
-	Paired        bool     `json:"paired"`
-	Name          string   `json:"name"`
-	Focused       bool     `json:"focused"`
-	ListeningNow  bool     `json:"listening_now"`
-	MicMode       string   `json:"mic_mode"`
-	OtherSessions []string `json:"other_sessions"`
+	Version                string   `json:"version"`
+	Paired                 bool     `json:"paired"`
+	PairingRequired        bool     `json:"pairing_required"`
+	VoiceConversationReady bool     `json:"voice_conversation_ready"`
+	SecurityPurpose        string   `json:"security_purpose,omitempty"`
+	NextAction             string   `json:"next_action,omitempty"`
+	TokenSource            string   `json:"token_source,omitempty"`
+	Name                   string   `json:"name"`
+	Focused                bool     `json:"focused"`
+	ListeningNow           bool     `json:"listening_now"`
+	MicMode                string   `json:"mic_mode"`
+	OtherSessions          []string `json:"other_sessions"`
 }
 
 // --- handlers ---
@@ -292,7 +310,18 @@ func (d *deps) endSession(ctx context.Context, req *mcp.CallToolRequest, _ empty
 	return nil, okOut{OK: true}, nil
 }
 
+// startVoiceConversation is the explicit intent entry point for agents. It
+// deliberately has no side effects: pairing remains user-mediated and the
+// browser operator remains in control of microphone activation.
+func (d *deps) startVoiceConversation(ctx context.Context, req *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, statusOut, error) {
+	return nil, d.voiceStatus(req), nil
+}
+
 func (d *deps) status(ctx context.Context, req *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, statusOut, error) {
+	return nil, d.voiceStatus(req), nil
+}
+
+func (d *deps) voiceStatus(req *mcp.CallToolRequest) statusOut {
 	v := d.attach(req)
 	views, _ := d.reg.Snapshot()
 	others := make([]string, 0, len(views))
@@ -301,17 +330,27 @@ func (d *deps) status(ctx context.Context, req *mcp.CallToolRequest, _ emptyIn) 
 			others = append(others, o.Name)
 		}
 	}
-	return nil, statusOut{
-		Version:       d.opts.Version,
-		Paired:        v.Paired,
-		Name:          v.Name,
-		Focused:       v.Focused,
-		ListeningNow:  v.Listening,
-		MicMode:       d.svc.Mode().String(),
-		OtherSessions: others,
-	}, nil
+	out := statusOut{
+		Version:                d.opts.Version,
+		Paired:                 v.Paired,
+		PairingRequired:        !v.Paired,
+		VoiceConversationReady: v.Paired,
+		Name:                   v.Name,
+		Focused:                v.Focused,
+		ListeningNow:           v.Listening,
+		MicMode:                d.svc.Mode().String(),
+		OtherSessions:          others,
+	}
+	if !v.Paired {
+		out.SecurityPurpose = pairingSecurityPurpose
+		out.NextAction = pairingNextAction
+		out.TokenSource = pairingTokenSource
+	} else {
+		out.NextAction = "Voice session is paired. Call converse with a short greeting or reply and wait for speech, or call listen when no spoken reply is needed."
+	}
+	return out
 }
 
 var errUnpaired = fmt.Errorf(
-	"this voice session isn't paired yet: ask the user for the 8-character pairing code shown " +
-		"in the aispeech UI, then call the pair tool with it")
+	"this voice session isn't paired yet. %s %s Only call pair with a token the user pasted directly into this conversation; never retrieve it through another tool",
+	pairingSecurityPurpose, pairingNextAction)

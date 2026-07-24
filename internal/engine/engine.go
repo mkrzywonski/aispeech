@@ -92,6 +92,7 @@ type Service struct {
 	mode       ListenMode
 	cancel     context.CancelFunc
 	dialogTO   time.Duration
+	dialogIdle bool
 	lastActive time.Time
 }
 
@@ -105,6 +106,17 @@ type playJob struct {
 
 const playQueueCapacity = 32
 
+// DefaultSTTPause is the silence required to end an utterance. It is long
+// enough for a natural mid-sentence pause but can be adjusted in Settings.
+const DefaultSTTPause = 1400 * time.Millisecond
+
+// PauseAdjuster is implemented by recorders that can change their VAD silence
+// threshold at runtime.
+type PauseAdjuster interface {
+	SetPauseDuration(time.Duration)
+	PauseDuration() time.Duration
+}
+
 // New builds a Service. Any nil engine is replaced with a null implementation.
 func New(reg *session.Registry, rec Recorder, stt Transcriber, tts Speaker, dialogTimeout time.Duration, speakCap int) *Service {
 	if rec == nil {
@@ -117,13 +129,14 @@ func New(reg *session.Registry, rec Recorder, stt Transcriber, tts Speaker, dial
 		tts = NullSpeaker{}
 	}
 	s := &Service{
-		reg:      reg,
-		rec:      rec,
-		stt:      stt,
-		tts:      tts,
-		dialogTO: dialogTimeout,
-		speakCap: speakCap,
-		playQ:    make(chan playJob, playQueueCapacity),
+		reg:        reg,
+		rec:        rec,
+		stt:        stt,
+		tts:        tts,
+		dialogTO:   dialogTimeout,
+		dialogIdle: true,
+		speakCap:   speakCap,
+		playQ:      make(chan playJob, playQueueCapacity),
 	}
 	go s.playLoop()
 	return s
@@ -147,6 +160,39 @@ func (s *Service) SetDialogTimeout(d time.Duration) {
 	s.mu.Unlock()
 }
 
+// SetDialogTimeoutEnabled controls whether a PTT dialog automatically stops
+// after its configured idle period. When disabled, it stays open until stopped
+// explicitly by the user.
+func (s *Service) SetDialogTimeoutEnabled(enabled bool) {
+	s.mu.Lock()
+	s.dialogIdle = enabled
+	s.mu.Unlock()
+}
+
+// DialogTimeoutEnabled reports whether dialog idle timeout enforcement is on.
+func (s *Service) DialogTimeoutEnabled() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dialogIdle
+}
+
+// SetSTTPause updates the silence required to finish an STT utterance. It is a
+// no-op for recorders without VAD support.
+func (s *Service) SetSTTPause(d time.Duration) {
+	if r, ok := s.rec.(PauseAdjuster); ok {
+		r.SetPauseDuration(d)
+	}
+}
+
+// STTPause reports the recorder's VAD pause threshold, or the default when no
+// adjustable recorder is installed.
+func (s *Service) STTPause() time.Duration {
+	if r, ok := s.rec.(PauseAdjuster); ok {
+		return r.PauseDuration()
+	}
+	return DefaultSTTPause
+}
+
 // DialogTimeout returns the current PTT dialog idle timeout.
 func (s *Service) DialogTimeout() time.Duration {
 	s.mu.Lock()
@@ -161,7 +207,7 @@ func (s *Service) DialogTimeout() time.Duration {
 func (s *Service) DialogCountdown() (remaining, total time.Duration, active bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.mode != ModeDialog {
+	if s.mode != ModeDialog || !s.dialogIdle {
 		return 0, 0, false
 	}
 	remaining = s.dialogTO - time.Since(s.lastActive)
@@ -213,6 +259,9 @@ func (s *Service) PlaySound(ctx context.Context, name, file string) (string, err
 		label = l
 		return e
 	})
+	if err == nil {
+		s.markDialogActivity()
+	}
 	return label, err
 }
 
@@ -296,21 +345,24 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 			if !ok {
 				return
 			}
-			s.mu.Lock()
-			s.lastActive = time.Now()
-			s.mu.Unlock()
 			text, err := s.transcriber().Transcribe(ctx, seg)
 			if err != nil {
 				slog.Warn("transcribe failed", "err", err)
 				continue
 			}
-			s.reg.Deliver(text)
+			// A VAD segment is only possible speech. Ambient sound and transcripts
+			// with no listening AI must not keep a dialog alive; reset only after
+			// successful STT delivery to an AI session.
+			if s.reg.Deliver(text) {
+				s.markDialogActivity()
+			}
 		case <-tick:
 			s.mu.Lock()
+			enabled := s.dialogIdle
 			idle := time.Since(s.lastActive)
 			to := s.dialogTO
 			s.mu.Unlock()
-			if idle > to {
+			if enabled && idle > to {
 				slog.Info("dialog idle timeout")
 				s.Stop()
 				return
@@ -343,7 +395,21 @@ func (s *Service) speakVoice(ctx context.Context, text, voice, spokenBy string) 
 		return 0, truncated, err
 	}
 	s.reg.RecordSpeech(spokenBy, text)
+	// Reset after successful playback, not when speech is merely queued. This
+	// keeps a dialog open for a real TTS reply while failed/cancelled playback
+	// does not extend it.
+	s.markDialogActivity()
 	return len(text), truncated, nil
+}
+
+// markDialogActivity restarts the dialog idle timeout after a completed STT or
+// TTS interaction. Raw microphone/VAD activity intentionally does not count.
+func (s *Service) markDialogActivity() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mode == ModeDialog {
+		s.lastActive = time.Now()
+	}
 }
 
 // enqueue submits a playback job to the FIFO queue and waits for it to finish,
@@ -377,7 +443,11 @@ func (s *Service) playLoop() {
 // InjectTranscript feeds text as if it had been transcribed. Used only by the
 // dev-inject endpoint to exercise routing without a microphone. It is never
 // exposed on the normal control surface.
-func (s *Service) InjectTranscript(text string) { s.reg.Deliver(text) }
+func (s *Service) InjectTranscript(text string) {
+	if s.reg.Deliver(text) {
+		s.markDialogActivity()
+	}
+}
 
 // --- null implementations ---
 
