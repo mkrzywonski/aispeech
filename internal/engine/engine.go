@@ -154,6 +154,23 @@ func (s *Service) DialogTimeout() time.Duration {
 	return s.dialogTO
 }
 
+// DialogCountdown reports the PTT dialog idle timer for the UI: time remaining
+// until the mic goes cold and the full window. active is false outside dialog
+// mode (idle, or constant-listen which never times out), so there is no
+// countdown to show.
+func (s *Service) DialogCountdown() (remaining, total time.Duration, active bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mode != ModeDialog {
+		return 0, 0, false
+	}
+	remaining = s.dialogTO - time.Since(s.lastActive)
+	if remaining < 0 {
+		remaining = 0
+	}
+	return remaining, s.dialogTO, true
+}
+
 // SetTranscriber swaps the STT engine at runtime.
 func (s *Service) SetTranscriber(t Transcriber) {
 	if t == nil {

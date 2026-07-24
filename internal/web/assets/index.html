@@ -50,6 +50,11 @@
   .ptt .big { font-size: 1.05rem; padding: .6rem 1.2rem; }
   .ptt .idle { opacity: .85; }
   .ptt .idle input { font: inherit; width: 3rem; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
+  /* depleting countdown to the idle mic timeout (dialog mode only) */
+  .idlecd { display: flex; align-items: center; gap: .5rem; flex-basis: 100%; margin-top: .15rem; font-size: .8rem; }
+  .idlecd-bar { flex: 1; max-width: 240px; height: 5px; border-radius: 999px; background: #8883; overflow: hidden; }
+  .idlecd-fill { height: 100%; width: 100%; background: #30a46c; border-radius: 999px; transition: width .25s linear, background-color .3s; }
+  .idlecd-txt { font-variant-numeric: tabular-nums; white-space: nowrap; opacity: .75; }
   .volwrap { display: inline-flex; align-items: center; gap: .4rem; }
   .spk { padding: 2px; border: none; background: none; cursor: pointer; color: inherit; display: inline-flex; align-items: center; }
   .spk .slash { display: none; }
@@ -138,6 +143,10 @@
   <span id="ailisten" class="pill" title="Whether the focused agent is waiting for voice via its listen() tool"></span>
   <label class="idle">Stop listening after <input type="number" id="idlemin" min="1" step="1"> minutes idle</label>
   <span class="cap">Click the mic or press Space to toggle the microphone.</span>
+  <div id="idlecd" class="idlecd" hidden>
+    <div class="idlecd-bar" role="progressbar" aria-label="Time until the mic turns off"><div class="idlecd-fill" id="idlecdfill"></div></div>
+    <span class="idlecd-txt" id="idlecdtxt"></span>
+  </div>
   </div>
   <div class="ptt-row">
   <button id="spk" class="spk" aria-label="Mute speaker" aria-pressed="false" title="Mute">
@@ -529,6 +538,33 @@ async function copyToken() {
   } catch (e) { $('tokenmsg').textContent = 'error creating token'; }
 }
 
+// --- idle-mic countdown: synced from each poll, animated locally in between ---
+let cd = { active: false, remaining: 0, total: 0, syncAt: 0 };
+function syncCountdown(state) {
+  cd = {
+    active: !!state.mic_idle_active,
+    remaining: state.mic_idle_remaining_seconds || 0,
+    total: state.mic_idle_total_seconds || 0,
+    syncAt: performance.now(),
+  };
+  tickCountdown();
+}
+function tickCountdown() {
+  const box = $('idlecd');
+  if (!cd.active || cd.total <= 0) { box.hidden = true; return; }
+  box.hidden = false;
+  let rem = cd.remaining - (performance.now() - cd.syncAt) / 1000;
+  if (rem < 0) rem = 0;
+  const frac = Math.max(0, Math.min(1, rem / cd.total));
+  const fill = $('idlecdfill');
+  fill.style.width = (frac * 100) + '%';
+  fill.style.background = frac < 0.15 ? '#e5484d' : (frac < 0.35 ? '#f5a623' : '#30a46c');
+  box.querySelector('.idlecd-bar').setAttribute('aria-valuenow', String(Math.round(frac * 100)));
+  const m = Math.floor(rem / 60), s = Math.floor(rem % 60);
+  $('idlecdtxt').textContent = `mic off in ${m}:${String(s).padStart(2, '0')}`;
+}
+setInterval(tickCountdown, 250);
+
 // --- main state ---
 function render(state) {
   micHot = state.mic_mode !== 'idle';
@@ -541,6 +577,7 @@ function render(state) {
   setFav(micHot);
   document.title = micHot ? '🔴 aispeech — listening' : 'aispeech';
   if (document.activeElement !== $('idlemin')) $('idlemin').value = state.dialog_timeout_minutes;
+  syncCountdown(state);
   $('devbox').hidden = !state.dev_inject;
 
   // Agent-listening status: distinct from mic-on. The mic can be hot while the

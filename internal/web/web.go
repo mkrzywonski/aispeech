@@ -433,12 +433,16 @@ type stateResp struct {
 	STTReady             bool                  `json:"stt_ready"`
 	TTSReady             bool                  `json:"tts_ready"`
 	DialogTimeoutMinutes float64               `json:"dialog_timeout_minutes"`
+	MicIdleActive        bool                  `json:"mic_idle_active"`
+	MicIdleRemaining     float64               `json:"mic_idle_remaining_seconds"`
+	MicIdleTotal         float64               `json:"mic_idle_total_seconds"`
 	Voices               []string              `json:"voices"`
 	DevInject            bool                  `json:"dev_inject"`
 }
 
 func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 	views, log := s.reg.Snapshot()
+	remaining, total, active := s.svc.DialogCountdown()
 	writeJSON(w, stateResp{
 		Sessions:             views,
 		Log:                  log,
@@ -446,6 +450,9 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request) {
 		STTReady:             s.svc.STTReady(),
 		TTSReady:             s.svc.TTSReady(),
 		DialogTimeoutMinutes: s.svc.DialogTimeout().Minutes(),
+		MicIdleActive:        active,
+		MicIdleRemaining:     remaining.Seconds(),
+		MicIdleTotal:         total.Seconds(),
 		Voices:               s.controls.InstalledVoices(),
 		DevInject:            s.devInj,
 	})
