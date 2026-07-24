@@ -256,6 +256,11 @@ func (s *Service) Stop() {
 func (s *Service) start(mode ListenMode) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.startLocked(mode)
+}
+
+// startLocked (re)opens the mic in mode; call with s.mu held.
+func (s *Service) startLocked(mode ListenMode) error {
 	s.stopLocked()
 	ctx, cancel := context.WithCancel(context.Background())
 	segs, err := s.rec.Start(ctx)
@@ -268,6 +273,27 @@ func (s *Service) start(mode ListenMode) error {
 	s.lastActive = time.Now()
 	go s.loop(ctx, segs, mode)
 	return nil
+}
+
+// SetRecorder swaps the active capture backend (e.g. local mic <-> browser mic).
+// If a dialog is currently open it is restarted on the new recorder so the swap
+// takes effect live, matching the hot-swappable STT/TTS behavior.
+func (s *Service) SetRecorder(rec Recorder) {
+	if rec == nil {
+		rec = NullRecorder{}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.rec == rec {
+		return
+	}
+	wasListening := s.cancel != nil
+	mode := s.mode
+	s.stopLocked()
+	s.rec = rec
+	if wasListening {
+		_ = s.startLocked(mode)
+	}
 }
 
 func (s *Service) stopLocked() {

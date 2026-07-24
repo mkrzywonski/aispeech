@@ -8,9 +8,10 @@ import (
 	"strings"
 )
 
-// player plays mono float32 PCM at a sample rate (satisfied by *AudioContext).
+// player plays mono float32 PCM at a sample rate, blocking until playback
+// finishes or ctx is cancelled (satisfied by *AudioContext and *AudioRouter).
 type player interface {
-	Play(pcm []float32, sampleRate int) error
+	Play(ctx context.Context, pcm []float32, sampleRate int) error
 }
 
 // PiperTTS synthesizes speech with the piper CLI and plays it via the audio
@@ -74,5 +75,5 @@ func (p *PiperTTS) Speak(ctx context.Context, text, voice string) error {
 	if err != nil {
 		return fmt.Errorf("read piper output: %w", err)
 	}
-	return p.play.Play(pcm, sr)
+	return p.play.Play(ctx, pcm, sr)
 }

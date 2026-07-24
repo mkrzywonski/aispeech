@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/mkrzywonski/aispeech/internal/authz"
+	"github.com/mkrzywonski/aispeech/internal/browseraudio"
 	"github.com/mkrzywonski/aispeech/internal/config"
 	"github.com/mkrzywonski/aispeech/internal/engine"
 	"github.com/mkrzywonski/aispeech/internal/mcpserver"
@@ -89,8 +90,9 @@ func main() {
 	}
 
 	reg := session.New()
+	bridge := browseraudio.New()
 
-	svc, audioCtx, cleanup, warnings := engine.Build(reg, engine.BuildOptions{
+	svc, router, cleanup, warnings := engine.Build(reg, bridge, engine.BuildOptions{
 		WhisperBin:    cfg.WhisperBin,
 		WhisperModel:  cfg.WhisperModel,
 		Language:      cfg.Language,
@@ -106,22 +108,23 @@ func main() {
 
 	// Apply persisted audio selections and levels to the backend.
 	var audioControl web.AudioControl
-	if audioCtx != nil {
-		audioCtx.SetInputDevice(cfg.InputDevice)
-		audioCtx.SetOutputDevice(cfg.OutputDevice)
-		audioCtx.SetOutputVolume(cfg.OutputVolume)
-		audioCtx.SetInputGain(cfg.InputGain)
-		audioCtx.SetMuted(cfg.Muted)
-		audioControl = audioCtx
+	if router != nil {
+		router.SetInputDevice(cfg.InputDevice)
+		router.SetOutputDevice(cfg.OutputDevice)
+		router.SetOutputVolume(cfg.OutputVolume)
+		router.SetInputGain(cfg.InputGain)
+		router.SetMuted(cfg.Muted)
+		audioControl = router
 
-		in, out := len(audioCtx.CaptureDevices()), len(audioCtx.PlaybackDevices())
+		in, out := router.LocalDeviceCounts()
 		slog.Info("audio devices", "input", in, "output", out)
 		if in == 0 && out == 0 {
-			slog.Warn("no audio devices found — the ALSA/PulseAudio client libraries are likely missing from the loader path. " +
-				"Run the packaged binary (`nix run .` or ./result/bin/aispeech), or add alsa-lib/libpulseaudio to LD_LIBRARY_PATH for `go run`.")
+			slog.Warn("no local audio devices found — the ALSA/PulseAudio client libraries are likely missing from the loader path. " +
+				"Run the packaged binary (`nix run .` or ./result/bin/aispeech), or add alsa-lib/libpulseaudio to LD_LIBRARY_PATH for `go run`. " +
+				"(Browser audio can still be used from the web UI.)")
 		}
 	}
-	models := engine.NewModelManager(svc, audioCtx)
+	models := engine.NewModelManager(svc, router)
 	store := modelstore.New(cfg.ResolvedModelsDir())
 	authStore := authz.NewStore(authz.DefaultTokenTTL)
 	allow := authz.NewAllower(bindAddr, cfg.TrustedHosts)
@@ -137,7 +140,7 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
-	web.New(reg, svc, controls, authStore, allow, *devInject).Routes(mux)
+	web.New(reg, svc, controls, authStore, allow, bridge, *devInject).Routes(mux)
 	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore,
 		func() []string { return store.Installed(modelstore.Piper) },
 		mcpserver.Options{

@@ -36,13 +36,13 @@ type ModelStatus struct {
 
 // ModelManager loads STT/TTS engines and swaps them into a running Service.
 type ModelManager struct {
-	svc *Service
-	ac  *AudioContext // nil when no audio backend (TTS impossible)
+	svc    *Service
+	router *AudioRouter // nil when no audio backend (TTS impossible)
 }
 
-// NewModelManager returns a manager bound to a Service and audio context.
-func NewModelManager(svc *Service, ac *AudioContext) *ModelManager {
-	return &ModelManager{svc: svc, ac: ac}
+// NewModelManager returns a manager bound to a Service and audio router.
+func NewModelManager(svc *Service, router *AudioRouter) *ModelManager {
+	return &ModelManager{svc: svc, router: router}
 }
 
 // Status reports the current configuration without changing the running engines.
@@ -53,7 +53,7 @@ func (m *ModelManager) Status(o ModelOptions) ModelStatus {
 		PiperBin:       orDefault(o.PiperBin, "piper"),
 		PiperVoice:     o.PiperVoice,
 		Language:       o.Language,
-		HasAudio:       m.ac != nil,
+		HasAudio:       m.router != nil,
 		WhisperModelOK: fileOK(o.WhisperModel),
 		PiperVoiceOK:   fileOK(o.PiperVoice),
 	}
@@ -64,9 +64,9 @@ func (m *ModelManager) Status(o ModelOptions) ModelStatus {
 	if _, err := NewWhisperSTT(o.WhisperBin, o.WhisperModel, o.Language); err != nil {
 		st.WhisperError = err.Error()
 	}
-	if m.ac == nil {
+	if m.router == nil {
 		st.PiperError = "no audio output device"
-	} else if _, err := NewPiperTTS(o.PiperBin, o.PiperVoice, m.ac); err != nil {
+	} else if _, err := NewPiperTTS(o.PiperBin, o.PiperVoice, m.router); err != nil {
 		st.PiperError = err.Error()
 	}
 
@@ -84,9 +84,9 @@ func (m *ModelManager) Apply(o ModelOptions) ModelStatus {
 		m.svc.SetTranscriber(NullTranscriber{})
 	}
 
-	if m.ac == nil {
+	if m.router == nil {
 		m.svc.SetSpeaker(NullSpeaker{})
-	} else if p, err := NewPiperTTS(o.PiperBin, o.PiperVoice, m.ac); err == nil {
+	} else if p, err := NewPiperTTS(o.PiperBin, o.PiperVoice, m.router); err == nil {
 		m.svc.SetSpeaker(p)
 	} else {
 		m.svc.SetSpeaker(NullSpeaker{})

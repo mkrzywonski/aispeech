@@ -9,7 +9,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/websocket"
+
 	"github.com/mkrzywonski/aispeech/internal/authz"
+	"github.com/mkrzywonski/aispeech/internal/browseraudio"
 	"github.com/mkrzywonski/aispeech/internal/config"
 	"github.com/mkrzywonski/aispeech/internal/engine"
 	"github.com/mkrzywonski/aispeech/internal/mcpinstall"
@@ -333,13 +336,15 @@ type Server struct {
 	controls *Controls
 	store    *authz.Store
 	allow    authz.Allower
+	bridge   *browseraudio.Bridge // may be nil when no audio backend
 	devInj   bool
 }
 
 // New returns a web Server. devInject enables the dev-only transcript injection
-// endpoint used to exercise routing without a microphone.
-func New(reg *session.Registry, svc *engine.Service, controls *Controls, store *authz.Store, allow authz.Allower, devInject bool) *Server {
-	return &Server{reg: reg, svc: svc, controls: controls, store: store, allow: allow, devInj: devInject}
+// endpoint used to exercise routing without a microphone. bridge carries browser
+// audio over the /ws endpoint (may be nil).
+func New(reg *session.Registry, svc *engine.Service, controls *Controls, store *authz.Store, allow authz.Allower, bridge *browseraudio.Bridge, devInject bool) *Server {
+	return &Server{reg: reg, svc: svc, controls: controls, store: store, allow: allow, bridge: bridge, devInj: devInject}
 }
 
 // Routes registers the UI and API handlers on mux. Mutating routes are wrapped
@@ -347,6 +352,7 @@ func New(reg *session.Registry, svc *engine.Service, controls *Controls, store *
 func (s *Server) Routes(mux *http.ServeMux) {
 	g := s.guard
 	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("GET /ws", s.wsAudio)
 	mux.HandleFunc("GET /api/state", s.state)
 	mux.HandleFunc("POST /api/pair/token", g(s.pairToken))
 	mux.HandleFunc("GET /api/audio", s.audioGet)
@@ -471,7 +477,54 @@ func (s *Server) audioSet(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Claim/release this browser tab as the audio endpoint for a direction when
+	// it selects (or deselects) the "Browser (this tab)" pseudo-device. The guard
+	// on this route guarantees a valid browser-session cookie.
+	if s.bridge != nil {
+		c, _ := r.Cookie(cookieName)
+		if u.OutputDevice != nil {
+			if *u.OutputDevice == engine.BrowserDevice {
+				s.bridge.ClaimOutput(c.Value)
+			} else {
+				s.bridge.ReleaseOutput()
+			}
+		}
+		if u.InputDevice != nil {
+			if *u.InputDevice == engine.BrowserDevice {
+				s.bridge.ClaimInput(c.Value)
+			} else {
+				s.bridge.ReleaseInput()
+			}
+		}
+	}
 	writeJSON(w, s.controls.state())
+}
+
+// wsAudio upgrades to a WebSocket carrying browser audio (playback + capture)
+// for this browser session. Same-origin + known-browser checks mirror guard;
+// the connection is then handed to the bridge until it closes.
+func (s *Server) wsAudio(w http.ResponseWriter, r *http.Request) {
+	if s.bridge == nil {
+		http.Error(w, "no audio backend", http.StatusServiceUnavailable)
+		return
+	}
+	if !authz.OriginAllowed(r.Header.Get("Origin"), s.allow) {
+		http.Error(w, "bad origin", http.StatusForbidden)
+		return
+	}
+	c, err := r.Cookie(cookieName)
+	if err != nil || !s.store.KnownBrowser(c.Value) {
+		http.Error(w, "no browser session", http.StatusForbidden)
+		return
+	}
+	// Origin is validated above against our own allowlist (tunnels, LAN IPs,
+	// hostname), so skip the library's stricter same-host check.
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: []string{"*"}})
+	if err != nil {
+		return
+	}
+	defer ws.CloseNow()
+	_ = s.bridge.Serve(r.Context(), ws, c.Value)
 }
 
 func (s *Server) testSpeaker(w http.ResponseWriter, r *http.Request) {

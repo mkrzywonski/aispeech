@@ -178,9 +178,10 @@ func (a *AudioContext) deviceNames(kind malgo.DeviceType) []string {
 }
 
 // Play plays mono float32 PCM at the given sample rate, blocking until it
-// finishes or is interrupted by StopPlayback. Output volume and mute are applied
-// live in the callback, so changing them takes effect mid-utterance.
-func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
+// finishes, is interrupted by StopPlayback, or ctx is cancelled. Output volume
+// and mute are applied live in the callback, so changing them takes effect
+// mid-utterance.
+func (a *AudioContext) Play(ctx context.Context, pcm []float32, sampleRate int) error {
 	if len(pcm) == 0 || a.paused.Load() {
 		return nil // paused: drop this utterance rather than play it
 	}
@@ -258,6 +259,7 @@ func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
 	select {
 	case <-done: // finished
 	case <-stop: // interrupted by StopPlayback
+	case <-ctx.Done(): // caller cancelled (e.g. agent disconnected)
 	}
 	return nil
 }
@@ -268,31 +270,35 @@ func (a *AudioContext) TestSpeaker() error {
 	return err
 }
 
-// PlaySound plays a built-in named sound or a WAV file through the selected
-// output (respecting volume/mute), returning a label for what was played.
-func (a *AudioContext) PlaySound(_ context.Context, name, file string) (string, error) {
-	var (
-		pcm   []float32
-		rate  int
-		label string
-	)
+// decodeSound resolves a built-in sound name or a WAV file path to mono PCM plus
+// a display label. Shared by the local and browser playback paths.
+func decodeSound(name, file string) (pcm []float32, rate int, label string, err error) {
 	switch {
 	case file != "":
-		p, sr, err := readWAVFile(file)
-		if err != nil {
-			return "", fmt.Errorf("play file: %w", err)
+		p, sr, e := readWAVFile(file)
+		if e != nil {
+			return nil, 0, "", fmt.Errorf("play file: %w", e)
 		}
-		pcm, rate, label = p, sr, filepath.Base(file)
+		return p, sr, filepath.Base(file), nil
 	case name != "":
 		p, sr, ok := generateSound(name)
 		if !ok {
-			return "", fmt.Errorf("unknown sound %q (have: %v)", name, SoundNames())
+			return nil, 0, "", fmt.Errorf("unknown sound %q (have: %v)", name, SoundNames())
 		}
-		pcm, rate, label = p, sr, name
+		return p, sr, name, nil
 	default:
-		return "", fmt.Errorf("provide a sound name or a WAV file path")
+		return nil, 0, "", fmt.Errorf("provide a sound name or a WAV file path")
 	}
-	if err := a.Play(pcm, rate); err != nil {
+}
+
+// PlaySound plays a built-in named sound or a WAV file through the selected
+// output (respecting volume/mute), returning a label for what was played.
+func (a *AudioContext) PlaySound(ctx context.Context, name, file string) (string, error) {
+	pcm, rate, label, err := decodeSound(name, file)
+	if err != nil {
+		return "", err
+	}
+	if err := a.Play(ctx, pcm, rate); err != nil {
 		return "", err
 	}
 	return label, nil
