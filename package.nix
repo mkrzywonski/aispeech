@@ -16,7 +16,7 @@ buildGoModule {
 
   # Changes only when go.mod dependencies change. On mismatch, nix prints the
   # correct value — replace it and rebuild.
-  vendorHash = "sha256-i8whWvIg7+UiEfyZofY1zz102V7V/a7y4dg6htqtX7U=";
+  vendorHash = "sha256-S8ojc01a0M40KaXHWOrbUIiytPMxtl1sJRCHluYpzCA=";
 
   # cgo: malgo compiles miniaudio, which dlopens ALSA/PulseAudio at runtime.
   nativeBuildInputs = [ makeWrapper ];
