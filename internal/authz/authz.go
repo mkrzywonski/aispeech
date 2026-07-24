@@ -24,6 +24,11 @@ import (
 // DefaultTokenTTL is how long a pairing token remains valid.
 const DefaultTokenTTL = 5 * time.Minute
 
+// DefaultOperatorTTL is how long the single UI-operator slot survives without a
+// request from its owner before another browser may claim it. It must exceed the
+// UI's poll interval with margin for background-tab throttling.
+const DefaultOperatorTTL = 2 * time.Minute
+
 var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 
 // Store holds browser sessions and pairing tokens. Safe for concurrent use.
@@ -33,6 +38,11 @@ type Store struct {
 	tokens   map[string]*tokenRec // token hash (hex) -> record
 	ttl      time.Duration
 	now      func() time.Time
+
+	// Single UI-operator slot: at most one browser principal may drive the hub.
+	operatorTTL    time.Duration
+	operatorCookie string
+	operatorSeen   time.Time
 }
 
 type tokenRec struct {
@@ -46,11 +56,37 @@ func NewStore(ttl time.Duration) *Store {
 		ttl = DefaultTokenTTL
 	}
 	return &Store{
-		browsers: make(map[string]time.Time),
-		tokens:   make(map[string]*tokenRec),
-		ttl:      ttl,
-		now:      time.Now,
+		browsers:    make(map[string]time.Time),
+		tokens:      make(map[string]*tokenRec),
+		ttl:         ttl,
+		now:         time.Now,
+		operatorTTL: DefaultOperatorTTL,
 	}
+}
+
+// AcquireOperator claims or refreshes the single UI-operator slot for cookie —
+// the one browser principal allowed to drive this hub. Only a known browser
+// session may hold it. The slot frees after operatorTTL of inactivity so a
+// restarted or replacement browser can take over, while an actively-polling
+// operator keeps other browsers out. Returns true if cookie owns the slot after
+// the call.
+func (s *Store) AcquireOperator(cookie string) bool {
+	if cookie == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.browsers[cookie]; !ok {
+		return false // not a browser session we issued
+	}
+	now := s.now()
+	if s.operatorCookie != "" && s.operatorCookie != cookie && now.Sub(s.operatorSeen) <= s.operatorTTL {
+		return false // another browser actively holds the slot
+	}
+	s.operatorCookie = cookie
+	s.operatorSeen = now
+	s.browsers[cookie] = now
+	return true
 }
 
 // NewBrowser mints a new browser-session cookie id and records it.

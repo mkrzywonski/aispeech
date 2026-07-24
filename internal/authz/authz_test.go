@@ -7,6 +7,46 @@ import (
 	"time"
 )
 
+func TestOperatorSlot(t *testing.T) {
+	s := NewStore(time.Minute)
+	now := time.Now()
+	s.now = func() time.Time { return now }
+	s.operatorTTL = time.Minute
+
+	// A cookie must be a known browser session to hold the slot.
+	if s.AcquireOperator("ghost") {
+		t.Fatal("unknown cookie acquired the operator slot")
+	}
+	a, b := s.NewBrowser(), s.NewBrowser()
+
+	// First known browser claims the slot; a different one is refused while it
+	// stays active.
+	if !s.AcquireOperator(a) {
+		t.Fatal("first browser should claim the slot")
+	}
+	if s.AcquireOperator(b) {
+		t.Fatal("second browser must be refused while the first is active")
+	}
+	// The operator keeps it by continuing to poll.
+	now = now.Add(30 * time.Second)
+	if !s.AcquireOperator(a) {
+		t.Fatal("active operator should keep the slot")
+	}
+	// Still within TTL of the last refresh, the other browser is refused.
+	if s.AcquireOperator(b) {
+		t.Fatal("slot taken over before idle timeout")
+	}
+	// After the operator goes idle past the TTL, another browser can take over.
+	now = now.Add(2 * time.Minute)
+	if !s.AcquireOperator(b) {
+		t.Fatal("idle slot should be claimable by another browser")
+	}
+	// Now b holds it and a is refused.
+	if s.AcquireOperator(a) {
+		t.Fatal("previous operator should be refused after handover")
+	}
+}
+
 func TestTokenLifecycle(t *testing.T) {
 	s := NewStore(time.Minute)
 

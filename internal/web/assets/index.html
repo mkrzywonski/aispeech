@@ -131,6 +131,8 @@
 
 <div class="banner err" id="disconnected" hidden role="alert">⚠ Disconnected from aispeech — the app may have stopped. Displayed state is stale.</div>
 
+<div class="banner warn" id="locked" hidden role="alert">🔒 Another browser is controlling this aispeech hub. Close the other UI, or wait — control frees after a couple of minutes of inactivity, then this tab takes over.</div>
+
 <div class="banner warn" id="voicewarn" hidden role="alert">
   <span id="voicewarntext"></span>
   <button id="voicewarnbtn">Set up voice models</button>
@@ -853,7 +855,12 @@ function setConnected(ok) {
 }
 async function refresh() {
   try {
-    const r = await fetch('/api/state'); if (!r.ok) throw new Error('bad status');
+    const r = await fetch('/api/state');
+    if (r.status === 409) { // another browser holds the single operator slot
+      failures = 0; setConnected(true); $('locked').hidden = false; return;
+    }
+    if (!r.ok) throw new Error('bad status');
+    $('locked').hidden = true;
     failures = 0; setConnected(true); render(await r.json());
   } catch (e) { if (++failures >= 2) setConnected(false); }
 }

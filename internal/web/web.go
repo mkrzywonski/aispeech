@@ -375,25 +375,26 @@ func New(reg *session.Registry, svc *engine.Service, controls *Controls, store *
 // Routes registers the UI and API handlers on mux. Mutating routes are wrapped
 // in guard, which requires a same-origin request from a known browser session.
 func (s *Server) Routes(mux *http.ServeMux) {
-	g := s.guard
+	g := s.guard // mutating: same-origin + operator
+	o := s.op    // read: operator only (also claims/refreshes the slot)
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /ws", s.wsAudio)
-	mux.HandleFunc("GET /api/state", s.state)
+	mux.HandleFunc("GET /api/state", o(s.state))
 	mux.HandleFunc("POST /api/pair/token", g(s.pairToken))
-	mux.HandleFunc("GET /api/audio", s.audioGet)
+	mux.HandleFunc("GET /api/audio", o(s.audioGet))
 	mux.HandleFunc("POST /api/audio", g(s.audioSet))
 	mux.HandleFunc("POST /api/audio/test-speaker", g(s.testSpeaker))
 	mux.HandleFunc("POST /api/audio/pause", g(s.pauseSpeaking))
 	mux.HandleFunc("POST /api/mic-test/start", g(s.micTestStart))
 	mux.HandleFunc("POST /api/mic-test/stop", g(s.micTestStop))
-	mux.HandleFunc("GET /api/mic-test/level", s.micTestLevel)
-	mux.HandleFunc("GET /api/models", s.modelsGet)
+	mux.HandleFunc("GET /api/mic-test/level", o(s.micTestLevel))
+	mux.HandleFunc("GET /api/models", o(s.modelsGet))
 	mux.HandleFunc("POST /api/models", g(s.modelsSet))
 	mux.HandleFunc("POST /api/models/download", g(s.modelsDownload))
-	mux.HandleFunc("GET /api/models/download", s.modelsDownloadStatus)
-	mux.HandleFunc("GET /api/interaction", s.interactionGet)
+	mux.HandleFunc("GET /api/models/download", o(s.modelsDownloadStatus))
+	mux.HandleFunc("GET /api/interaction", o(s.interactionGet))
 	mux.HandleFunc("POST /api/interaction", g(s.interactionSet))
-	mux.HandleFunc("GET /api/install", s.installGet)
+	mux.HandleFunc("GET /api/install", o(s.installGet))
 	mux.HandleFunc("POST /api/install", g(s.installSet))
 	mux.HandleFunc("POST /api/session/focus", g(s.focus))
 	mux.HandleFunc("POST /api/session/rename", g(s.rename))
@@ -407,22 +408,34 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	}
 }
 
-// guard requires a same-origin request carrying a known browser-session cookie.
-// This blocks cross-origin web pages (Origin mismatch, SameSite-stripped cookie)
-// from driving voice or settings. It is not a defense against a local process
-// that scripts the browser flow — see the threat model in the design docs.
+// op requires the request to come from the hub's single active UI operator: the
+// one browser principal (cookie) allowed to read state and drive sessions. The
+// first browser to poll claims the slot; it frees after inactivity so a
+// replacement browser can take over. Every other browser is refused with 409 —
+// this is what stops a second user, in their own browser, from seeing or
+// injecting into this hub's sessions. It is not a defense against a process that
+// scripts the operator's own browser flow — see the threat model in the docs.
+func (s *Server) op(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		c, err := r.Cookie(cookieName)
+		if err != nil || !s.store.AcquireOperator(c.Value) {
+			http.Error(w, "another aispeech UI is the active operator for this hub", http.StatusConflict)
+			return
+		}
+		h(w, r)
+	}
+}
+
+// guard is op plus a same-origin check, for state-changing routes. The Origin
+// check blocks cross-origin pages (whose SameSite=Strict cookie is stripped
+// anyway); the operator check restricts action to the one authorized browser.
 func (s *Server) guard(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !authz.OriginAllowed(r.Header.Get("Origin"), s.allow) {
 			http.Error(w, "bad origin", http.StatusForbidden)
 			return
 		}
-		c, err := r.Cookie(cookieName)
-		if err != nil || !s.store.KnownBrowser(c.Value) {
-			http.Error(w, "no browser session", http.StatusForbidden)
-			return
-		}
-		h(w, r)
+		s.op(h)(w, r)
 	}
 }
 
@@ -540,8 +553,8 @@ func (s *Server) wsAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := r.Cookie(cookieName)
-	if err != nil || !s.store.KnownBrowser(c.Value) {
-		http.Error(w, "no browser session", http.StatusForbidden)
+	if err != nil || !s.store.AcquireOperator(c.Value) {
+		http.Error(w, "another aispeech UI is the active operator for this hub", http.StatusConflict)
 		return
 	}
 	// Origin is validated above against our own allowlist (tunnels, LAN IPs,

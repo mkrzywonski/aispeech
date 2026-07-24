@@ -289,12 +289,29 @@ still pair — localhost offers no defense there. Within the stated scope, this
 reliably stops accidental agent self-pairing, cross-origin/DNS-rebinding web
 pages, and passive reads of a pairing secret.
 
+### Single UI operator (multi-user hosts)
+
+The hub is one process with one registry, one focus, and one audio device. On a
+shared machine, loopback is reachable by every local user, so a second user's
+browser could otherwise read `/api/state` (session list **and** voice
+transcript), pair, or — via browser audio — claim the microphone and inject into
+the focused session. To keep the hub single-operator, **exactly one browser
+principal (cookie) may drive it at a time** (`authz.AcquireOperator`). The first
+browser to poll claims the slot; every other cookie is refused with `409` on
+*all* UI routes — reads (`/api/state`, `/api/audio`, …), mutations, and the
+`/ws` audio socket alike. The slot frees after ~2 min of inactivity, so a
+restarted or replacement browser can take over without a hub restart. This is
+first-come contention, not identity: a squatter can lock a user out (a visible,
+self-healing DoS) but cannot reach their agent, since pairing still requires
+pasting a token into that agent's own TUI. **For genuine multi-user use, run one
+hub per OS user** on separate ports.
+
 ### Additional controls
 
 - **Host allowlist.** Every request whose `Host` isn't the loopback/bound
   authority is rejected (`authz.HostGuard`) — the primary defense against DNS
-  rebinding. Mutating UI routes additionally require a same-origin `Origin` and a
-  known browser cookie.
+  rebinding. Mutating UI routes additionally require a same-origin `Origin`, and
+  every UI route requires the single-operator cookie (above).
 - **Bind narrowly.** Localhost by default; when a WSL-reachable bind is needed,
   bind to that specific host — **never `0.0.0.0`**. Binding is defense-in-depth;
   the Host/Origin allowlist and the pairing token are the real gates.
@@ -388,8 +405,12 @@ pluggable cloud engines behind the STT/TTS interface (kept optional).
 - **`speak()`** returns after playback and calls are FIFO-serialized. The
   stop/pause control covers manual interruption; barge-in *by voice* over TTS is
   still future work.
-- **Pairing hardening (Phase 2).** Per-tab↔agent binding with focus/revoke
-  gating, cross-session transcript filtering, and CSRF tokens.
+- **Pairing hardening (Phase 2).** The security boundary is the browser
+  **principal** (cookie), not the tab — multiple tabs of the operator's own
+  browser are the same principal and intentionally unrestricted. The single-UI
+  operator gate (§7) now enforces one principal per hub; remaining hardening is
+  per-principal focus/revoke gating (an operation acts only on sessions the
+  caller paired) and CSRF tokens for defense-in-depth.
 - **Persistent agent credential** so an agent restart doesn't require re-pairing
   (proxy stores an issued credential in a `0600` file).
 - **Project name / branding.** "aispeech" is a working title.
