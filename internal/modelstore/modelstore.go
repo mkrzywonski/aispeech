@@ -81,10 +81,29 @@ func Catalog() []CatalogEntry {
 		whisperEntry("small.en", "466 MB"),
 		whisperEntry("base", "142 MB (multilingual)"),
 		whisperEntry("small", "466 MB (multilingual)"),
+		// English (US)
 		piperEntry("en_US-lessac-medium", "Piper en_US · lessac (medium)", "63 MB", "en/en_US/lessac/medium/en_US-lessac-medium"),
 		piperEntry("en_US-amy-medium", "Piper en_US · amy (medium)", "63 MB", "en/en_US/amy/medium/en_US-amy-medium"),
-		piperEntry("en_US-ryan-high", "Piper en_US · ryan (high)", "114 MB", "en/en_US/ryan/high/en_US-ryan-high"),
+		piperEntry("en_US-ryan-high", "Piper en_US · ryan (high)", "121 MB", "en/en_US/ryan/high/en_US-ryan-high"),
+		piperEntry("en_US-hfc_female-medium", "Piper en_US · hfc_female (medium)", "63 MB", "en/en_US/hfc_female/medium/en_US-hfc_female-medium"),
+		piperEntry("en_US-hfc_male-medium", "Piper en_US · hfc_male (medium)", "63 MB", "en/en_US/hfc_male/medium/en_US-hfc_male-medium"),
+		piperEntry("en_US-joe-medium", "Piper en_US · joe (medium)", "63 MB", "en/en_US/joe/medium/en_US-joe-medium"),
+		piperEntry("en_US-kristin-medium", "Piper en_US · kristin (medium)", "64 MB", "en/en_US/kristin/medium/en_US-kristin-medium"),
+		piperEntry("en_US-libritts_r-medium", "Piper en_US · libritts_r (medium)", "79 MB", "en/en_US/libritts_r/medium/en_US-libritts_r-medium"),
+		// English (GB)
 		piperEntry("en_GB-alba-medium", "Piper en_GB · alba (medium)", "63 MB", "en/en_GB/alba/medium/en_GB-alba-medium"),
+		piperEntry("en_GB-alan-medium", "Piper en_GB · alan (medium)", "63 MB", "en/en_GB/alan/medium/en_GB-alan-medium"),
+		piperEntry("en_GB-cori-high", "Piper en_GB · cori (high)", "114 MB", "en/en_GB/cori/high/en_GB-cori-high"),
+		piperEntry("en_GB-jenny_dioco-medium", "Piper en_GB · jenny_dioco (medium)", "63 MB", "en/en_GB/jenny_dioco/medium/en_GB-jenny_dioco-medium"),
+		piperEntry("en_GB-northern_english_male-medium", "Piper en_GB · northern_english_male (medium)", "63 MB", "en/en_GB/northern_english_male/medium/en_GB-northern_english_male-medium"),
+		// Other languages
+		piperEntry("de_DE-thorsten-medium", "Piper de_DE · thorsten (medium)", "63 MB", "de/de_DE/thorsten/medium/de_DE-thorsten-medium"),
+		piperEntry("es_ES-davefx-medium", "Piper es_ES · davefx (medium)", "63 MB", "es/es_ES/davefx/medium/es_ES-davefx-medium"),
+		piperEntry("es_MX-ald-medium", "Piper es_MX · ald (medium)", "63 MB", "es/es_MX/ald/medium/es_MX-ald-medium"),
+		piperEntry("fr_FR-siwis-medium", "Piper fr_FR · siwis (medium)", "63 MB", "fr/fr_FR/siwis/medium/fr_FR-siwis-medium"),
+		piperEntry("it_IT-paola-medium", "Piper it_IT · paola (medium)", "64 MB", "it/it_IT/paola/medium/it_IT-paola-medium"),
+		piperEntry("pt_BR-faber-medium", "Piper pt_BR · faber (medium)", "63 MB", "pt/pt_BR/faber/medium/pt_BR-faber-medium"),
+		piperEntry("nl_NL-alex-medium", "Piper nl_NL · alex (medium)", "64 MB", "nl/nl_NL/alex/medium/nl_NL-alex-medium"),
 	}
 }
 
