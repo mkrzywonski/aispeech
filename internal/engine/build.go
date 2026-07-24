@@ -15,6 +15,7 @@ type BuildOptions struct {
 	DialogTimeout                      time.Duration
 	STTPause                           time.Duration
 	SpeakCap                           int
+	SoundsDir                          string // custom notification sounds
 }
 
 // Build constructs a Service with the real audio/STT/TTS engines where possible,
@@ -38,6 +39,7 @@ func Build(reg *session.Registry, bridge *browseraudio.Bridge, o BuildOptions) (
 	}
 	cleanup = ac.Close
 	router = NewAudioRouter(ac, bridge)
+	router.SetSoundsDir(o.SoundsDir)
 	rec = router.InitialRecorder()
 	if mr, ok := rec.(*MalgoRecorder); ok {
 		mr.SetPauseDuration(o.STTPause) // apply the configured VAD pause to the local mic

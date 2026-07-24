@@ -101,6 +101,7 @@ func main() {
 		DialogTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,
 		STTPause:      time.Duration(cfg.STTPauseMilliseconds) * time.Millisecond,
 		SpeakCap:      cfg.SpeakCharCap,
+		SoundsDir:     config.SoundsDir(),
 	})
 	defer cleanup()
 	svc.SetDialogTimeoutEnabled(cfg.DialogTimeoutEnabled)
@@ -137,6 +138,7 @@ func main() {
 		Store:      store,
 		Downloader: &modelstore.Downloader{},
 		MCPURL:     "http://" + bindAddr + "/mcp",
+		SoundsDir:  config.SoundsDir(),
 		Cfg:        &cfg,
 		Save:       func() error { return cfg.Save() },
 	})

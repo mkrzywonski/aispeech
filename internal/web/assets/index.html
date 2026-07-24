@@ -112,6 +112,14 @@
   .lvl { font-variant-numeric: tabular-nums; opacity: .75; margin-left: .3rem; }
   .cap { font-size: .78rem; opacity: .65; }
   .testrow { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
+  .sounds { display: flex; flex-direction: column; gap: .3rem; max-width: 520px; }
+  .sound-row { display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem; border: 1px solid #8883; border-radius: 8px; }
+  .sound-row .play { display: inline-flex; align-items: center; padding: 2px; border: none; background: none; cursor: pointer; color: #888; }
+  .sound-row .play:hover { color: #2d7cf0; }
+  .sound-row .sname { flex: 1; font-variant-numeric: tabular-nums; }
+  .sound-row .badge { font-size: .68rem; padding: .05rem .4rem; border-radius: 999px; border: 1px solid #8888; opacity: .8; }
+  .sound-row .badge.custom { background: #8b5cf6; color: #fff; border-color: #8b5cf6; opacity: 1; }
+  .soundadd { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; max-width: 520px; }
   .meter { flex: 1; min-width: 120px; max-width: 220px; height: 14px; border: 1px solid #8888; border-radius: 7px; overflow: hidden; background: #8881; }
   .meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#30a46c,#f5a623 70%,#e5484d); transition: width .06s linear; }
   .meter.indet .meter-fill { width: 40% !important; background: repeating-linear-gradient(45deg,#2d7cf0,#2d7cf0 8px,#2d7cf055 8px,#2d7cf055 16px); animation: slide 1s linear infinite; }
@@ -222,6 +230,16 @@
   </div>
   <p id="noaudio" class="muted" hidden>No audio backend available on this host.</p>
 
+  <h2>Notification sounds</h2>
+  <p class="hint">Sounds the AI can play with <code>play_sound</code>. Click ▶ to preview through the current speaker. Upload a WAV to add a sound or override a built-in one of the same name.</p>
+  <div id="sounds" class="sounds"></div>
+  <div class="soundadd">
+    <input type="file" id="soundfile" accept="audio/wav,.wav">
+    <input type="text" id="soundname" class="name-in" placeholder="name" aria-label="New sound name">
+    <button id="soundupload">Upload</button>
+    <span class="lvl" id="soundmsg"></span>
+  </div>
+
   <h2>Models</h2>
   <div class="grid">
     <label for="wselect">Speech&#8209;to&#8209;text</label>
@@ -284,7 +302,7 @@ function setTab(tab) {
   $('tab-hub').setAttribute('aria-selected', String(!settings));
   $('tab-settings').setAttribute('aria-selected', String(settings));
   localStorage.setItem('aispeech.tab', tab);
-  if (settings) { refreshAudio(); refreshModels(); refreshInstall(); }
+  if (settings) { refreshAudio(); refreshModels(); refreshInstall(); refreshSounds(); }
 }
 $('tab-hub').onclick = () => setTab('hub');
 $('tab-settings').onclick = () => setTab('settings');
@@ -387,6 +405,45 @@ async function pollMicLevel() {
   } catch (e) {}
 }
 window.addEventListener('beforeunload', () => { if (micTimer) navigator.sendBeacon('/api/mic-test/stop'); });
+
+// --- notification sounds ---
+const SPEAKER_ICON = '<svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10v4h3l4 4V6L6 10H3z" fill="currentColor" stroke="none"></path><path d="M15 9.5a4 4 0 0 1 0 5"></path><path d="M18 7a8 8 0 0 1 0 10"></path></svg>';
+async function refreshSounds() {
+  if ($('settings').hidden) return;
+  try { renderSounds((await (await fetch('/api/sounds')).json()).sounds || []); } catch (e) {}
+}
+function renderSounds(list) {
+  const c = $('sounds');
+  c.innerHTML = list.map(s => {
+    const badge = s.custom
+      ? `<span class="badge custom">${s.builtin ? 'override' : 'custom'}</span>`
+      : `<span class="badge">built&#8209;in</span>`;
+    const del = s.custom ? `<button data-delsound="${esc(s.name)}">Delete</button>` : '';
+    return `<div class="sound-row"><button class="play" data-playsound="${esc(s.name)}" title="Play" aria-label="Play ${esc(s.name)}">${SPEAKER_ICON}</button><span class="sname">${esc(s.name)}</span>${badge}${del}</div>`;
+  }).join('') || '<span class="muted">No sounds.</span>';
+  c.querySelectorAll('[data-playsound]').forEach(b => b.onclick = () =>
+    fetch('/api/sounds/play', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: b.dataset.playsound }) }));
+  c.querySelectorAll('[data-delsound]').forEach(b => b.onclick = async () => {
+    if (!confirm('Delete sound "' + b.dataset.delsound + '"?')) return;
+    const r = await fetch('/api/sounds/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: b.dataset.delsound }) });
+    if (r.ok) renderSounds((await r.json()).sounds || []);
+  });
+}
+$('soundfile').onchange = () => { if (!$('soundname').value && $('soundfile').files[0]) $('soundname').value = $('soundfile').files[0].name.replace(/\.wav$/i, ''); };
+$('soundupload').onclick = async () => {
+  const f = $('soundfile').files[0];
+  const name = ($('soundname').value || '').trim();
+  if (!f) { $('soundmsg').textContent = 'choose a WAV file'; return; }
+  if (!name) { $('soundmsg').textContent = 'enter a name'; return; }
+  $('soundmsg').textContent = 'uploading…';
+  try {
+    const buf = await f.arrayBuffer();
+    const r = await fetch('/api/sounds/upload?name=' + encodeURIComponent(name), { method: 'POST', body: buf });
+    if (!r.ok) { $('soundmsg').textContent = await r.text(); return; }
+    renderSounds((await r.json()).sounds || []);
+    $('soundmsg').textContent = 'saved “' + name + '”'; $('soundfile').value = ''; $('soundname').value = '';
+  } catch (e) { $('soundmsg').textContent = 'upload failed'; }
+};
 
 function fillSelect(sel, names, current) {
   if (document.activeElement === sel) return;

@@ -68,9 +68,9 @@ func Path() (string, error) {
 	return filepath.Join(dir, "aispeech", "config.json"), nil
 }
 
-// DefaultModelsDir returns the default download location for models
-// (~/.local/share/aispeech/models, honoring XDG_DATA_HOME).
-func DefaultModelsDir() string {
+// dataDir returns the base data directory (~/.local/share, honoring
+// XDG_DATA_HOME), falling back to the config dir on non-Linux.
+func dataDir() string {
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
 		if home, err := os.UserHomeDir(); err == nil {
@@ -79,7 +79,19 @@ func DefaultModelsDir() string {
 			base = cfg // fallback for non-Linux
 		}
 	}
-	return filepath.Join(base, "aispeech", "models")
+	return base
+}
+
+// DefaultModelsDir returns the default download location for models
+// (~/.local/share/aispeech/models, honoring XDG_DATA_HOME).
+func DefaultModelsDir() string {
+	return filepath.Join(dataDir(), "aispeech", "models")
+}
+
+// SoundsDir returns where custom notification sounds are stored
+// (~/.local/share/aispeech/sounds).
+func SoundsDir() string {
+	return filepath.Join(dataDir(), "aispeech", "sounds")
 }
 
 // ResolvedModelsDir returns ModelsDir or the default when unset.

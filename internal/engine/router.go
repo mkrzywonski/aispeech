@@ -41,6 +41,8 @@ type AudioRouter struct {
 
 	outBrowser atomic.Bool // playback -> browser tab
 	inBrowser  atomic.Bool // capture  -> browser tab
+
+	soundsDir string // custom notification sounds (WAV files); "" = built-ins only
 }
 
 // NewAudioRouter builds a router over a local audio context and a browser bridge.
@@ -59,6 +61,12 @@ func newAudioRouter(local *AudioContext, b bridge) *AudioRouter {
 }
 
 func (r *AudioRouter) bindService(svc *Service) { r.svc = svc }
+
+// SetSoundsDir points the router at a directory of custom notification sounds.
+func (r *AudioRouter) SetSoundsDir(dir string) { r.soundsDir = dir }
+
+// Sounds lists the playable sounds (built-in plus custom WAVs).
+func (r *AudioRouter) Sounds() []SoundInfo { return ListSounds(r.soundsDir) }
 
 // InitialRecorder is the recorder the Service should start with (local mic).
 func (r *AudioRouter) InitialRecorder() Recorder { return r.malgoRec }
@@ -80,8 +88,18 @@ func (r *AudioRouter) Play(ctx context.Context, pcm []float32, sampleRate int) e
 	return nil
 }
 
-// PlaySound decodes a built-in sound or WAV file and plays it via Play.
+// PlaySound plays a built-in sound (or a custom WAV of the same name from the
+// sounds dir), or an explicit WAV file, via the active output.
 func (r *AudioRouter) PlaySound(ctx context.Context, name, file string) (string, error) {
+	// A named sound prefers a custom override in the sounds dir.
+	if file == "" && name != "" {
+		if pcm, rate, ok := resolveSound(r.soundsDir, name); ok {
+			if err := r.Play(ctx, pcm, rate); err != nil {
+				return "", err
+			}
+			return name, nil
+		}
+	}
 	pcm, rate, label, err := decodeSound(name, file)
 	if err != nil {
 		return "", err

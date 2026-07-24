@@ -2,10 +2,13 @@
 package web
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -50,35 +53,86 @@ type Deps struct {
 	Store      *modelstore.Store
 	Downloader *modelstore.Downloader
 	MCPURL     string // the HTTP MCP endpoint agents connect to
+	SoundsDir  string // custom notification sounds
 	Cfg        *config.Config
 	Save       func() error
 }
 
 // Controls applies audio and model setting changes and persists them to config.
 type Controls struct {
-	mu     sync.Mutex
-	audio  AudioControl
-	svc    *engine.Service
-	models *engine.ModelManager
-	store  *modelstore.Store
-	dl     *modelstore.Downloader
-	mcpURL string
-	cfg    *config.Config
-	save   func() error
+	mu        sync.Mutex
+	audio     AudioControl
+	svc       *engine.Service
+	models    *engine.ModelManager
+	store     *modelstore.Store
+	dl        *modelstore.Downloader
+	mcpURL    string
+	soundsDir string
+	cfg       *config.Config
+	save      func() error
 }
 
 // NewControls binds the collaborators that settings changes act on.
 func NewControls(d Deps) *Controls {
 	return &Controls{
-		audio:  d.Audio,
-		svc:    d.Svc,
-		models: d.Models,
-		store:  d.Store,
-		dl:     d.Downloader,
-		mcpURL: d.MCPURL,
-		cfg:    d.Cfg,
-		save:   d.Save,
+		audio:     d.Audio,
+		svc:       d.Svc,
+		models:    d.Models,
+		store:     d.Store,
+		dl:        d.Downloader,
+		mcpURL:    d.MCPURL,
+		soundsDir: d.SoundsDir,
+		cfg:       d.Cfg,
+		save:      d.Save,
 	}
+}
+
+// --- notification sounds ---
+
+// soundsList returns the playable sounds (built-in + custom WAVs).
+func (c *Controls) soundsList() []engine.SoundInfo { return engine.ListSounds(c.soundsDir) }
+
+// playSound plays a sound (custom override or built-in) through the active
+// output, in the background so the request returns promptly.
+func (c *Controls) playSound(name string) {
+	go func() {
+		if _, err := c.svc.PlaySound(context.Background(), name, ""); err != nil {
+			slog.Warn("play sound", "name", name, "err", err)
+		}
+	}()
+}
+
+// saveSound validates a WAV upload and stores it as a custom sound named name.
+func (c *Controls) saveSound(name string, wav []byte) error {
+	path, ok := engine.CustomSoundPath(c.soundsDir, name)
+	if !ok {
+		return errorString("invalid sound name (use letters, digits, - or _)")
+	}
+	if err := os.MkdirAll(c.soundsDir, 0o700); err != nil {
+		return err
+	}
+	// Write to a temp file first, validate it plays, then swap into place.
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, wav, 0o600); err != nil {
+		return err
+	}
+	if err := engine.ValidateWAVFile(tmp); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// deleteSound removes a custom sound (reverting to the built-in if there is one).
+func (c *Controls) deleteSound(name string) error {
+	path, ok := engine.CustomSoundPath(c.soundsDir, name)
+	if !ok {
+		return errorString("invalid sound name")
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
 
 // --- interaction (PTT dialog timeout) ---
@@ -385,6 +439,10 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/audio", g(s.audioSet))
 	mux.HandleFunc("POST /api/audio/test-speaker", g(s.testSpeaker))
 	mux.HandleFunc("POST /api/audio/pause", g(s.pauseSpeaking))
+	mux.HandleFunc("GET /api/sounds", o(s.soundsGet))
+	mux.HandleFunc("POST /api/sounds/play", g(s.soundsPlay))
+	mux.HandleFunc("POST /api/sounds/upload", g(s.soundsUpload))
+	mux.HandleFunc("POST /api/sounds/delete", g(s.soundsDelete))
 	mux.HandleFunc("POST /api/mic-test/start", g(s.micTestStart))
 	mux.HandleFunc("POST /api/mic-test/stop", g(s.micTestStop))
 	mux.HandleFunc("GET /api/mic-test/level", o(s.micTestLevel))
@@ -528,7 +586,7 @@ func (s *Server) audioSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Claim/release this browser tab as the audio endpoint for a direction when
-	// it selects (or deselects) the "Browser (this tab)" pseudo-device. The guard
+	// it selects (or deselects) the "Browser" pseudo-device. The guard
 	// on this route guarantees a valid browser-session cookie.
 	if s.bridge != nil {
 		c, _ := r.Cookie(cookieName)
@@ -593,6 +651,56 @@ func (s *Server) testSpeaker(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// maxSoundBytes caps a custom-sound upload.
+const maxSoundBytes = 10 << 20 // 10 MiB
+
+func (s *Server) soundsGet(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, map[string]any{"sounds": s.controls.soundsList()})
+}
+
+func (s *Server) soundsPlay(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	s.controls.playSound(body.Name)
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) soundsUpload(w http.ResponseWriter, r *http.Request) {
+	name := r.URL.Query().Get("name")
+	wav, err := io.ReadAll(io.LimitReader(r.Body, maxSoundBytes+1))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(wav) > maxSoundBytes {
+		http.Error(w, "sound file too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if err := s.controls.saveSound(name, wav); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"sounds": s.controls.soundsList()})
+}
+
+func (s *Server) soundsDelete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.controls.deleteSound(body.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, map[string]any{"sounds": s.controls.soundsList()})
 }
 
 func (s *Server) pauseSpeaking(w http.ResponseWriter, r *http.Request) {
