@@ -480,7 +480,8 @@ type vad struct {
 const (
 	vadBlock     = 320   // 20 ms at 16 kHz
 	vadThreshold = 0.012 // RMS gate
-	vadHangover  = 35    // silent blocks (~0.7s) ending an utterance
+	vadHangover  = 70    // silent blocks (~1.4s) ending an utterance; long enough
+	//                      to ride over natural mid-sentence pauses without cutting
 	vadMinBlocks = 8     // ignore utterances shorter than ~160 ms
 	vadMaxSamp   = captureRate * 20
 )
