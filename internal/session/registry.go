@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Utterance is a transcribed command routed to a target session.
@@ -83,10 +85,17 @@ func (r *Registry) Attach(id, clientName string) *Session {
 	if clientName == "" {
 		clientName = "agent"
 	}
+	// Default the display name (and thus the spoken wake word) to a single word
+	// derived from the client id, e.g. "claude-code" -> "claude". A one-word name
+	// is far easier to say and to match against transcribed speech.
+	base := firstWord(clientName)
+	if base == "" {
+		base = "agent"
+	}
 	s := &Session{
 		ID:         id,
 		ClientName: clientName,
-		Name:       r.uniqueNameLocked(clientName),
+		Name:       r.uniqueNameLocked(base),
 		Connected:  time.Now(),
 	}
 	r.byID[id] = s
@@ -378,32 +387,93 @@ func (r *Registry) RecordSpeech(name, text string) {
 
 // --- internal helpers (call with r.mu held) ---
 
+// matchLeadingNameLocked matches a session's name against the leading words of
+// text, treating hyphens, underscores, punctuation and whitespace all as word
+// separators. This is what makes speech routing robust: a name like
+// "claude-code" matches spoken "Claude code, ..." even though whisper writes no
+// hyphen. The command remainder keeps its original casing and punctuation.
 func (r *Registry) matchLeadingNameLocked(text string) (id, rest string, ok bool) {
-	// Longest-name-first so multi-word names win over prefixes.
-	type nm struct{ id, name string }
+	type nm struct {
+		id     string
+		tokens []string
+	}
 	var names []nm
 	for _, s := range r.byID {
 		if s.Paired {
-			names = append(names, nm{s.ID, s.Name})
-		}
-	}
-	sort.Slice(names, func(i, j int) bool { return len(names[i].name) > len(names[j].name) })
-	lower := strings.ToLower(text)
-	for _, n := range names {
-		key := strings.ToLower(n.name)
-		if lower == key {
-			return n.id, "", true
-		}
-		// Match "<name> <rest>" or "<name>, <rest>".
-		if strings.HasPrefix(lower, key) {
-			after := text[len(n.name):]
-			trimmed := strings.TrimLeft(after, " ,.:—-")
-			if len(after) != len(trimmed) || after == "" {
-				return n.id, trimmed, true
+			if t := wordTokens(s.Name); len(t) > 0 {
+				names = append(names, nm{s.ID, t})
 			}
 		}
 	}
+	// Longest-name-first (by token count) so a multi-word name wins over a
+	// shorter name that is a prefix of it.
+	sort.Slice(names, func(i, j int) bool { return len(names[i].tokens) > len(names[j].tokens) })
+	for _, n := range names {
+		if remainder, matched := stripLeadingTokens(text, n.tokens); matched {
+			return n.id, remainder, true
+		}
+	}
 	return "", "", false
+}
+
+// isWordRune reports whether r is part of a word (letter or digit); everything
+// else (spaces, hyphens, punctuation) separates words.
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsNumber(r) }
+
+// wordTokens splits s into lowercase word tokens on any non-word runes, so
+// "claude-code" and "claude code" both yield ["claude", "code"].
+func wordTokens(s string) []string {
+	return strings.FieldsFunc(strings.ToLower(s), func(r rune) bool { return !isWordRune(r) })
+}
+
+// firstWord returns the first word token of s in its original casing, or "".
+func firstWord(s string) string {
+	start, end := -1, -1
+	for i, r := range s {
+		if isWordRune(r) {
+			if start < 0 {
+				start = i
+			}
+			end = i + utf8.RuneLen(r)
+		} else if start >= 0 {
+			break
+		}
+	}
+	if start < 0 {
+		return ""
+	}
+	return s[start:end]
+}
+
+// stripLeadingTokens reports whether the leading word tokens of text equal want
+// (case-insensitively), and if so returns the remainder of text after those
+// tokens with leading separators trimmed. Word boundaries ignore separators, so
+// want ["claude","code"] matches "Claude-code, run it" -> rest "run it".
+func stripLeadingTokens(text string, want []string) (string, bool) {
+	pos := 0
+	for _, w := range want {
+		// Skip separators before the next token.
+		for pos < len(text) {
+			r, size := utf8.DecodeRuneInString(text[pos:])
+			if isWordRune(r) {
+				break
+			}
+			pos += size
+		}
+		start := pos
+		for pos < len(text) {
+			r, size := utf8.DecodeRuneInString(text[pos:])
+			if !isWordRune(r) {
+				break
+			}
+			pos += size
+		}
+		if start == pos || !strings.EqualFold(text[start:pos], w) {
+			return "", false
+		}
+	}
+	rest := strings.TrimLeftFunc(text[pos:], func(r rune) bool { return !isWordRune(r) })
+	return rest, true
 }
 
 func (r *Registry) uniqueNameLocked(base string) string {
