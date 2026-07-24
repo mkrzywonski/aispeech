@@ -13,6 +13,7 @@ type BuildOptions struct {
 	WhisperBin, WhisperModel, Language string
 	PiperBin, PiperVoice               string
 	DialogTimeout                      time.Duration
+	STTPause                           time.Duration
 	SpeakCap                           int
 }
 
@@ -38,6 +39,9 @@ func Build(reg *session.Registry, bridge *browseraudio.Bridge, o BuildOptions) (
 	cleanup = ac.Close
 	router = NewAudioRouter(ac, bridge)
 	rec = router.InitialRecorder()
+	if mr, ok := rec.(*MalgoRecorder); ok {
+		mr.SetPauseDuration(o.STTPause) // apply the configured VAD pause to the local mic
+	}
 
 	if w, err := NewWhisperSTT(o.WhisperBin, o.WhisperModel, o.Language); err != nil {
 		warnings = append(warnings, fmt.Sprintf("STT disabled: %v", err))

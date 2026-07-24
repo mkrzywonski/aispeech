@@ -38,6 +38,22 @@ func TestPairListenDeliver(t *testing.T) {
 		t.Fatalf("connect: %v", err)
 	}
 	defer cs.Close()
+	if init := cs.InitializeResult(); init == nil || init.Instructions == "" {
+		t.Fatal("hub did not provide voice-chat instructions at initialize")
+	}
+
+	var st struct {
+		Paired                 bool   `json:"paired"`
+		PairingRequired        bool   `json:"pairing_required"`
+		VoiceConversationReady bool   `json:"voice_conversation_ready"`
+		SecurityPurpose        string `json:"security_purpose"`
+		NextAction             string `json:"next_action"`
+		TokenSource            string `json:"token_source"`
+	}
+	structured(t, ctx, cs, "start_voice_conversation", nil, &st)
+	if st.Paired || !st.PairingRequired || st.VoiceConversationReady || st.SecurityPurpose == "" || st.NextAction == "" || st.TokenSource != "user_pasted_only" {
+		t.Fatalf("unpaired start_voice_conversation = %+v, want actionable pairing guidance", st)
+	}
 
 	// listen before pairing must be refused (and this also attaches the session).
 	if res := callToolRaw(t, ctx, cs, "listen", nil); !res.IsError {
@@ -65,6 +81,10 @@ func TestPairListenDeliver(t *testing.T) {
 	structured(t, ctx, cs, "pair", map[string]any{"token": tok}, &pr)
 	if !pr.OK {
 		t.Fatal("pair not ok")
+	}
+	structured(t, ctx, cs, "start_voice_conversation", nil, &st)
+	if !st.Paired || st.PairingRequired || !st.VoiceConversationReady || st.NextAction == "" {
+		t.Fatalf("paired start_voice_conversation = %+v, want ready voice conversation", st)
 	}
 
 	// Start listening; deliver an utterance; expect it back.

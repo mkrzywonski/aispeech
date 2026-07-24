@@ -35,6 +35,10 @@
              border: 1px solid #2d7cf0; background: #2d7cf015; border-radius: 10px; }
   .pending .code { font-family: ui-monospace, monospace; font-size: 1.2rem; letter-spacing: .14em; background: #f5a62333; padding: .15rem .5rem; border-radius: 6px; }
   .pending .who { font-weight: 600; }
+  .pairmsg { flex-basis: 100%; padding: .45rem .6rem; border-radius: 6px; background: #2d7cf018; font-size: .88rem; line-height: 1.35; }
+  .pairmsg.ok { color: #1f9d55; background: #30a46c18; border-left: 3px solid #30a46c; }
+  .pairmsg.warn { color: #c07800; background: #f5a62318; border-left: 3px solid #f5a623; }
+  .pairmsg.err { color: #e5484d; background: #e5484d18; border-left: 3px solid #e5484d; }
 
   .ptt { display: flex; flex-direction: column; gap: .7rem;
          padding: 1rem; border: 1px solid #8883; border-radius: 12px; background: #8880; }
@@ -149,7 +153,7 @@
     </svg>
   </button>
   <span id="ailisten" class="pill" title="Whether the focused agent is waiting for voice via its listen() tool"></span>
-  <label class="idle">Stop listening after <input type="number" id="idlemin" min="1" step="1"> minutes idle</label>
+  <label class="idle"><input type="checkbox" id="idleenabled"> Stop listening after <input type="number" id="idlemin" min="1" step="1"> minutes idle</label>
   <span class="cap">Click the mic or press Space to toggle the microphone.</span>
   <div id="idlecd" class="idlecd" hidden>
     <div class="idlecd-bar" role="progressbar" aria-label="Time until the mic turns off"><div class="idlecd-fill" id="idlecdfill"></div></div>
@@ -205,6 +209,8 @@
     <select id="out"></select>
     <label for="gain">Mic gain</label>
     <div><input type="range" id="gain" min="0" max="3" step="0.05"><span class="lvl" id="gainv"></span></div>
+    <label for="sttpause">End speech after pause</label>
+    <div><input type="range" id="sttpause" min="0.3" max="10" step="0.1" aria-describedby="sttpausehint"><span class="lvl" id="sttpausev"></span><div class="cap" id="sttpausehint">How long silence must last before speech-to-text sends an utterance.</div></div>
     <label>Test</label>
     <div class="testrow">
       <button id="testspk">Test speaker</button>
@@ -289,6 +295,10 @@ $('idlemin').onchange = (e) => {
   const m = parseFloat(e.target.value); if (!(m > 0)) return;
   fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_minutes: m }) });
 };
+$('idleenabled').onchange = (e) => {
+  $('idlemin').disabled = !e.target.checked;
+  fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_enabled: e.target.checked }) });
+};
 document.addEventListener('keydown', (e) => {
   if (e.code !== 'Space' || e.repeat) return;
   const t = e.target.tagName;
@@ -337,6 +347,9 @@ async function initVolume() {
 $('gain').oninput = (e) => { $('gainv').textContent = fmtPct(e.target.value); };
 $('gain').onchange = (e) => postAudio({ gain: parseFloat(e.target.value) });
 const fmtPct = (v) => Math.round(parseFloat(v) * 100) + '%';
+const fmtSeconds = (ms) => (Math.round(ms / 100) / 10).toFixed(1) + ' s';
+$('sttpause').oninput = (e) => { $('sttpausev').textContent = fmtSeconds(parseFloat(e.target.value) * 1000); };
+$('sttpause').onchange = (e) => postAudio({ stt_pause_milliseconds: Math.round(parseFloat(e.target.value) * 1000) });
 
 $('testspk').onclick = () => fetch('/api/audio/test-speaker', { method: 'POST' });
 let micTimer = null;
@@ -376,6 +389,7 @@ async function refreshAudio() {
   fillSelect($('out'), a.output || [], a.output_device);
   setAudioLevels(a);
   if (document.activeElement !== $('gain')) { $('gain').value = a.gain; $('gainv').textContent = fmtPct(a.gain); }
+  if (document.activeElement !== $('sttpause')) { $('sttpause').value = (a.stt_pause_milliseconds || 1400) / 1000; $('sttpausev').textContent = fmtSeconds(a.stt_pause_milliseconds || 1400); }
 }
 
 // --- models ---
@@ -522,34 +536,52 @@ function renderLogEntry(e) {
 }
 
 // --- pending pairings ---
+let pairingFeedback = null;
+
 function renderPending(pending) {
   const c = $('pending');
-  if (pending.length === 0) { c.innerHTML = ''; return; }
+  if (pending.length === 0) { pairingFeedback = null; c.innerHTML = ''; return; }
   const names = pending.map(s => esc(s.client_name)).join(', ');
   c.innerHTML = `
     <div class="pending">
       <span>🔗 Waiting to pair: <span class="who">${names}</span>. Click <strong>Copy pairing token</strong>, then paste the token to the agent in its terminal.</span>
       <button id="copytoken" class="primary">Copy pairing token</button>
-      <span class="lvl" id="tokenmsg"></span>
+      <div class="pairmsg" id="tokenmsg" role="status" aria-live="polite" hidden></div>
       ${pending.map(s => `<button data-revoke="${s.id}">Dismiss ${esc(s.client_name)}</button>`).join('')}
     </div>`;
   $('copytoken').onclick = copyToken;
   c.querySelectorAll('[data-revoke]').forEach(b => b.onclick = () => post('/api/session/revoke', { id: b.dataset.revoke }));
+  renderPairingFeedback();
+}
+function setPairingFeedback(kind, text) {
+  pairingFeedback = { kind, text };
+  renderPairingFeedback();
+}
+function renderPairingFeedback() {
+  const msg = $('tokenmsg');
+  if (!msg) return;
+  if (!pairingFeedback) { msg.hidden = true; return; }
+  msg.hidden = false;
+  msg.className = 'pairmsg ' + pairingFeedback.kind;
+  msg.textContent = pairingFeedback.text;
+  const button = $('copytoken');
+  if (button) button.textContent = pairingFeedback.kind === 'ok' ? 'Copy a fresh token' : 'Copy pairing token';
 }
 async function copyToken() {
+  setPairingFeedback('warn', 'Creating a fresh pairing token…');
   try {
     const r = await fetch('/api/pair/token', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-    if (!r.ok) { $('tokenmsg').textContent = 'could not create token'; return; }
+    if (!r.ok) { setPairingFeedback('err', 'Could not create a pairing token. Try again.'); return; }
     const d = await r.json();
     const mins = Math.round((d.expires_in_seconds || 300) / 60);
     try {
       await navigator.clipboard.writeText(d.token);
-      $('tokenmsg').textContent = `copied — paste to your agent (expires in ${mins} min)`;
+      setPairingFeedback('ok', `Pairing token copied. Paste it into the Codex TUI before it expires in ${mins} minute${mins === 1 ? '' : 's'}.`);
     } catch (e) {
       // Clipboard blocked: reveal it for manual copy (still only in this browser).
-      $('tokenmsg').textContent = 'token: ' + d.token;
+      setPairingFeedback('warn', `Clipboard copy was blocked. Copy this token manually, then paste it into the Codex TUI: ${d.token}`);
     }
-  } catch (e) { $('tokenmsg').textContent = 'error creating token'; }
+  } catch (e) { setPairingFeedback('err', 'Could not create a pairing token. Try again.'); }
 }
 
 // --- idle-mic countdown: synced from each poll, animated locally in between ---
@@ -731,6 +763,8 @@ function render(state) {
   setFav(micHot);
   document.title = micHot ? '🔴 aispeech — listening' : 'aispeech';
   if (document.activeElement !== $('idlemin')) $('idlemin').value = state.dialog_timeout_minutes;
+  if (document.activeElement !== $('idleenabled')) $('idleenabled').checked = !!state.dialog_timeout_enabled;
+  $('idlemin').disabled = !state.dialog_timeout_enabled;
   syncCountdown(state);
   $('devbox').hidden = !state.dev_inject;
 

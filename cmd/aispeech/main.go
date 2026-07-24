@@ -99,9 +99,11 @@ func main() {
 		PiperBin:      cfg.PiperBin,
 		PiperVoice:    cfg.PiperVoice,
 		DialogTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,
+		STTPause:      time.Duration(cfg.STTPauseMilliseconds) * time.Millisecond,
 		SpeakCap:      cfg.SpeakCharCap,
 	})
 	defer cleanup()
+	svc.SetDialogTimeoutEnabled(cfg.DialogTimeoutEnabled)
 	for _, w := range warnings {
 		slog.Warn(w)
 	}

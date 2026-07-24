@@ -373,13 +373,39 @@ func (a *AudioContext) MicTestActive() bool {
 type MalgoRecorder struct {
 	ac *AudioContext
 
-	mu   sync.Mutex
-	dev  *malgo.Device
-	stop chan struct{}
+	mu          sync.Mutex
+	dev         *malgo.Device
+	stop        chan struct{}
+	pauseBlocks atomic.Int64
 }
 
 // NewMalgoRecorder builds a recorder on the shared audio context.
-func NewMalgoRecorder(ac *AudioContext) *MalgoRecorder { return &MalgoRecorder{ac: ac} }
+func NewMalgoRecorder(ac *AudioContext) *MalgoRecorder {
+	r := &MalgoRecorder{ac: ac}
+	r.SetPauseDuration(DefaultSTTPause)
+	return r
+}
+
+// SetPauseDuration changes the silence required to finish an utterance. The
+// VAD reads this atomically, so an active recording picks up the new value.
+func (r *MalgoRecorder) SetPauseDuration(d time.Duration) {
+	if d <= 0 {
+		d = DefaultSTTPause
+	}
+	if d < 300*time.Millisecond {
+		d = 300 * time.Millisecond
+	}
+	if d > 10*time.Second {
+		d = 10 * time.Second
+	}
+	blocks := int64((d + 20*time.Millisecond - 1) / (20 * time.Millisecond))
+	r.pauseBlocks.Store(blocks)
+}
+
+// PauseDuration returns the effective VAD silence threshold.
+func (r *MalgoRecorder) PauseDuration() time.Duration {
+	return time.Duration(r.pauseBlocks.Load()) * 20 * time.Millisecond
+}
 
 // Start opens the input device and returns a channel of endpointed utterances.
 func (r *MalgoRecorder) Start(ctx context.Context) (<-chan Segment, error) {
@@ -453,7 +479,7 @@ func (r *MalgoRecorder) Stop() error {
 // process runs the VAD over incoming audio and emits Segments.
 func (r *MalgoRecorder) process(ctx context.Context, raw <-chan []float32, out chan<- Segment) {
 	defer close(out)
-	v := newVAD()
+	v := newVAD(&r.pauseBlocks)
 	for {
 		select {
 		case <-ctx.Done():
@@ -477,22 +503,30 @@ func (r *MalgoRecorder) process(ctx context.Context, raw <-chan []float32, out c
 // vad is a simple energy-based voice-activity detector with silence hangover.
 // It is intentionally dependency-free; a Silero-VAD backend is a planned upgrade.
 type vad struct {
-	block    []float32 // accumulates until blockSize
-	inSpeech bool
-	utt      []float32
-	silence  int // consecutive silent blocks while in speech
+	block       []float32 // accumulates until blockSize
+	inSpeech    bool
+	utt         []float32
+	silence     int // consecutive silent blocks while in speech
+	pauseBlocks *atomic.Int64
 }
 
 const (
 	vadBlock     = 320   // 20 ms at 16 kHz
 	vadThreshold = 0.012 // RMS gate
-	vadHangover  = 70    // silent blocks (~1.4s) ending an utterance; long enough
-	//                      to ride over natural mid-sentence pauses without cutting
+	// The silence that ends an utterance is now configurable per recorder via
+	// pauseBlocks (see MalgoRecorder.SetPauseDuration / DefaultSTTPause).
 	vadMinBlocks = 8 // ignore utterances shorter than ~160 ms
 	vadMaxSamp   = captureRate * 20
 )
 
-func newVAD() *vad { return &vad{} }
+func newVAD(pauseBlocks *atomic.Int64) *vad {
+	if pauseBlocks == nil {
+		p := &atomic.Int64{}
+		p.Store(int64(DefaultSTTPause / (20 * time.Millisecond)))
+		pauseBlocks = p
+	}
+	return &vad{pauseBlocks: pauseBlocks}
+}
 
 // push feeds samples and returns any completed utterances.
 func (v *vad) push(samples []float32) [][]float32 {
@@ -510,7 +544,7 @@ func (v *vad) push(samples []float32) [][]float32 {
 		} else if v.inSpeech {
 			v.utt = append(v.utt, blk...) // keep trailing silence for context
 			v.silence++
-			if v.silence >= vadHangover {
+			if v.silence >= int(v.pauseBlocks.Load()) {
 				if u := v.finish(); u != nil {
 					done = append(done, u)
 				}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http/httptest"
 	"os/exec"
 	"path/filepath"
@@ -48,6 +49,9 @@ func TestProxyBridge(t *testing.T) {
 		t.Fatalf("connect via proxy: %v", err)
 	}
 	defer cs.Close()
+	if init := cs.InitializeResult(); init == nil || init.Instructions == "" {
+		t.Fatal("proxy did not forward the hub's voice-chat instructions")
+	}
 
 	// The proxy should mirror the hub's tools.
 	names := map[string]bool{}
@@ -57,14 +61,26 @@ func TestProxyBridge(t *testing.T) {
 		}
 		names[tool.Name] = true
 	}
-	for _, want := range []string{"pair", "converse", "listen", "speak", "play_sound", "status", "end_session"} {
+	for _, want := range []string{"start_voice_conversation", "pair", "converse", "listen", "speak", "play_sound", "status", "end_session"} {
 		if !names[want] {
 			t.Fatalf("proxy did not mirror tool %q (got %v)", want, names)
 		}
 	}
 
-	// status attaches the session at the hub; the identity should be "claude".
-	call(t, ctx, cs, "status", nil)
+	// start_voice_conversation attaches the session at the hub and gives an unpaired agent an
+	// actionable, user-mediated pairing flow.
+	var st struct {
+		Paired                 bool   `json:"paired"`
+		PairingRequired        bool   `json:"pairing_required"`
+		VoiceConversationReady bool   `json:"voice_conversation_ready"`
+		SecurityPurpose        string `json:"security_purpose"`
+		NextAction             string `json:"next_action"`
+		TokenSource            string `json:"token_source"`
+	}
+	decode(t, call(t, ctx, cs, "start_voice_conversation", nil), &st)
+	if st.Paired || !st.PairingRequired || st.VoiceConversationReady || st.SecurityPurpose == "" || st.NextAction == "" || st.TokenSource != "user_pasted_only" {
+		t.Fatalf("unpaired start_voice_conversation = %+v, want actionable pairing guidance", st)
+	}
 	views, _ := reg.Snapshot()
 	if len(views) != 1 || views[0].ClientName != "claude" {
 		t.Fatalf("hub session = %+v, want one named claude", views)
@@ -101,6 +117,98 @@ func TestProxyBridge(t *testing.T) {
 		}
 	case <-time.After(6 * time.Second):
 		t.Fatal("listen via proxy did not return")
+	}
+}
+
+// TestProxyStartsWithoutHub verifies the proxy remains a discoverable MCP
+// server when Codex starts before aispeech. Once the hub comes up, a tool call
+// reconnects; this test covers the critical first half of that recovery path.
+func TestProxyStartsWithoutHub(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary; skipped in -short")
+	}
+	bin := filepath.Join(t.TempDir(), "aispeech")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, out)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "mcp-proxy", "--url", "http://127.0.0.1:1/mcp", "--name", "codex")
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	cs, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		t.Fatalf("connect via fallback proxy: %v", err)
+	}
+	defer cs.Close()
+	if init := cs.InitializeResult(); init == nil || init.Instructions == "" {
+		t.Fatal("fallback proxy did not provide voice-chat instructions")
+	}
+
+	names := map[string]bool{}
+	for tool, err := range cs.Tools(ctx, nil) {
+		if err != nil {
+			t.Fatalf("list fallback tools: %v", err)
+		}
+		names[tool.Name] = true
+	}
+	for _, want := range []string{"start_voice_conversation", "status", "pair", "converse", "listen", "speak", "play_sound", "end_session"} {
+		if !names[want] {
+			t.Fatalf("fallback proxy did not expose tool %q (got %v)", want, names)
+		}
+	}
+}
+
+// TestProxyReconnectsWhenHubStarts verifies the fallback catalog is not just
+// discoverable: an already-running proxy connects successfully when the hub
+// appears later, without restarting Codex or the proxy.
+func TestProxyReconnectsWhenHubStarts(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds the binary; skipped in -short")
+	}
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(t.TempDir(), "aispeech")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v: %s", err, out)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, "mcp-proxy", "--url", "http://"+addr+"/mcp", "--name", "codex")
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "test"}, nil)
+	cs, err := client.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		t.Fatalf("connect via fallback proxy: %v", err)
+	}
+	defer cs.Close()
+
+	reg := session.New()
+	svc := engine.New(reg, nil, nil, nil, time.Minute, 600)
+	store := authz.NewStore(time.Minute)
+	ts := httptest.NewUnstartedServer(mcpserver.NewHandler(reg, svc, store, nil, mcpserver.Options{}))
+	_ = ts.Listener.Close()
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts.Listener = listener
+	ts.Start()
+	defer ts.Close()
+
+	var st struct {
+		Paired          bool `json:"paired"`
+		PairingRequired bool `json:"pairing_required"`
+	}
+	decode(t, call(t, ctx, cs, "status", nil), &st)
+	if st.Paired || !st.PairingRequired {
+		t.Fatalf("status after hub reconnect = %+v, want unpaired actionable session", st)
 	}
 }
 

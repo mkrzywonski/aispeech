@@ -234,6 +234,22 @@ buffering — a delayed command is worse than a dropped one.
 
 ## 7. Security model
 
+### Security scope
+
+aispeech is a speech interface for a local AI coding assistant, not a defense
+against a compromised machine. It does **not** attempt to protect against root,
+malware, or another process running with the same OS-user authority as the hub,
+browser, or AI client; such a process can generally read user data, drive local
+applications, or access local credentials.
+
+Its security goal is narrower and deliberate: do not turn the local web UI into
+an unauthenticated prompt-injection or microphone-audio channel. Pairing proves
+that the person controlling the authorized browser UI also deliberately supplied
+a confirmation to the intended AI TUI session. It is not a claim to establish
+the user's real-world identity. This protects against unauthenticated localhost
+clients, cross-origin/DNS-rebinding pages, and processes that lack control of
+both the authorized browser session and the AI TUI.
+
 ### Threat model
 
 The MCP endpoint is localhost TCP (and must be reachable from WSL2). Risks:
@@ -269,9 +285,9 @@ the human. Failed `pair` attempts are rate-limited per connection.
 
 **Threat-model limit:** on a single-user host, a process with full user authority
 (reading the clipboard, keystrokes, or scripting the whole browser flow) can
-still pair — localhost offers no defense there. What this reliably stops is
-accidental agent self-pairing, cross-origin/DNS-rebinding web pages, and passive
-reads of a pairing secret.
+still pair — localhost offers no defense there. Within the stated scope, this
+reliably stops accidental agent self-pairing, cross-origin/DNS-rebinding web
+pages, and passive reads of a pairing secret.
 
 ### Additional controls
 
