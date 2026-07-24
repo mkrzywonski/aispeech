@@ -132,11 +132,11 @@ type catalogView struct {
 
 type modelsResp struct {
 	engine.ModelStatus
-	ModelsDir        string                    `json:"models_dir"`
-	InstalledWhisper []string                  `json:"installed_whisper"`
-	InstalledPiper   []string                  `json:"installed_piper"`
-	Catalog          []catalogView             `json:"catalog"`
-	Download         modelstore.DownloadState  `json:"download"`
+	ModelsDir        string                   `json:"models_dir"`
+	InstalledWhisper []string                 `json:"installed_whisper"`
+	InstalledPiper   []string                 `json:"installed_piper"`
+	Catalog          []catalogView            `json:"catalog"`
+	Download         modelstore.DownloadState `json:"download"`
 }
 
 func (c *Controls) modelsState() modelsResp {

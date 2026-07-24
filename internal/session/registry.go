@@ -27,7 +27,7 @@ type Utterance struct {
 
 // Session is one connected agent.
 type Session struct {
-	ID          string    // MCP connection id (identity)
+	ID         string    // MCP connection id (identity)
 	ClientName string    // from MCP clientInfo, e.g. "claude"
 	Name       string    // display name / session-word (user-renamable)
 	Paired     bool      // completed the pairing handshake
@@ -60,11 +60,11 @@ type LogEntry struct {
 
 // Registry is the concurrency-safe source of truth for sessions and focus.
 type Registry struct {
-	mu          sync.Mutex
-	byID        map[string]*Session
-	focusID     string
-	voiceSeq    int        // rotates voice assignment when all are in use
-	log         []LogEntry // unified activity log ring buffer, newest last
+	mu       sync.Mutex
+	byID     map[string]*Session
+	focusID  string
+	voiceSeq int        // rotates voice assignment when all are in use
+	log      []LogEntry // unified activity log ring buffer, newest last
 }
 
 // New returns an empty Registry.

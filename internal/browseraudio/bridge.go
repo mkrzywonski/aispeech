@@ -50,11 +50,11 @@ type msg struct {
 
 // conn is one connected browser tab.
 type conn struct {
-	ws       *websocket.Conn
-	browser  string
-	writeMu  sync.Mutex // serializes the (control+binary) write pair
-	captBuf  []float32  // accumulates the in-progress capture utterance
-	inUtt    bool
+	ws      *websocket.Conn
+	browser string
+	writeMu sync.Mutex // serializes the (control+binary) write pair
+	captBuf []float32  // accumulates the in-progress capture utterance
+	inUtt   bool
 }
 
 func (c *conn) writeJSON(ctx context.Context, m msg) error {
@@ -65,7 +65,7 @@ func (c *conn) writeJSON(ctx context.Context, m msg) error {
 // Bridge multiplexes browser audio over the set of connected tabs. The zero
 // value is not usable; call New.
 type Bridge struct {
-	mu       sync.Mutex
+	mu        sync.Mutex
 	byBrowser map[string][]*conn // browser cookie -> its live connections
 	outputID  string             // browser cookie that owns playback ("" = none)
 	captureID string             // browser cookie that owns capture ("" = none)

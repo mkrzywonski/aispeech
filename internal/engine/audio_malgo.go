@@ -160,7 +160,7 @@ func (a *AudioContext) Close() {
 }
 
 // CaptureDevices lists input device names.
-func (a *AudioContext) CaptureDevices() []string  { return a.deviceNames(malgo.Capture) }
+func (a *AudioContext) CaptureDevices() []string { return a.deviceNames(malgo.Capture) }
 
 // PlaybackDevices lists output device names.
 func (a *AudioContext) PlaybackDevices() []string { return a.deviceNames(malgo.Playback) }
@@ -488,7 +488,7 @@ const (
 	vadThreshold = 0.012 // RMS gate
 	vadHangover  = 70    // silent blocks (~1.4s) ending an utterance; long enough
 	//                      to ride over natural mid-sentence pauses without cutting
-	vadMinBlocks = 8     // ignore utterances shorter than ~160 ms
+	vadMinBlocks = 8 // ignore utterances shorter than ~160 ms
 	vadMaxSamp   = captureRate * 20
 )
 

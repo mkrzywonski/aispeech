@@ -64,8 +64,8 @@ func TestBareNameSwitchesFocusOnly(t *testing.T) {
 
 func TestDropWhenNotListening(t *testing.T) {
 	r := New()
-	pair(t, r, "id1", "claude")   // focused, but never calls listen()
-	r.Deliver("do something")     // no outstanding listen -> dropped (recognized entry only)
+	pair(t, r, "id1", "claude") // focused, but never calls listen()
+	r.Deliver("do something")   // no outstanding listen -> dropped (recognized entry only)
 	_, log := r.Snapshot()
 	last, ok := lastOfKind(log, "recognized")
 	if !ok {

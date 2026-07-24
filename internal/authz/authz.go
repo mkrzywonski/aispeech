@@ -29,8 +29,8 @@ var b32 = base32.StdEncoding.WithPadding(base32.NoPadding)
 // Store holds browser sessions and pairing tokens. Safe for concurrent use.
 type Store struct {
 	mu       sync.Mutex
-	browsers map[string]time.Time  // cookie id -> last seen
-	tokens   map[string]*tokenRec  // token hash (hex) -> record
+	browsers map[string]time.Time // cookie id -> last seen
+	tokens   map[string]*tokenRec // token hash (hex) -> record
 	ttl      time.Duration
 	now      func() time.Time
 }
