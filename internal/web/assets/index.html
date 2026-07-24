@@ -390,6 +390,16 @@ async function refreshAudio() {
   setAudioLevels(a);
   if (document.activeElement !== $('gain')) { $('gain').value = a.gain; $('gainv').textContent = fmtPct(a.gain); }
   if (document.activeElement !== $('sttpause')) { $('sttpause').value = (a.stt_pause_milliseconds || 1400) / 1000; $('sttpausev').textContent = fmtSeconds(a.stt_pause_milliseconds || 1400); }
+  // The browser mic endpoints speech itself, so this local-VAD setting has no
+  // effect there — disable it (rather than silently no-op) and say why.
+  const browserMic = a.input_device === BROWSER_DEVICE;
+  $('sttpause').disabled = browserMic;
+  const sttLabel = document.querySelector('label[for="sttpause"]');
+  $('sttpause').parentElement.style.opacity = browserMic ? '.5' : '';
+  if (sttLabel) sttLabel.style.opacity = browserMic ? '.5' : '';
+  $('sttpausehint').textContent = browserMic
+    ? 'The browser microphone ends utterances on its own; this applies only to a local microphone.'
+    : 'How long silence must last before speech-to-text sends an utterance.';
 }
 
 // --- models ---
