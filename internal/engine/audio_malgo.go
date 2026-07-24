@@ -9,12 +9,18 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/gen2brain/malgo"
 )
 
 const captureRate = 16000 // whisper.cpp expects 16 kHz mono
+
+// captureGuardTail keeps the microphone gated for a short window after playback
+// ends, so the tail of a spoken reply (and any speaker/room ring-out) isn't
+// captured and transcribed back as if it were user speech.
+const captureGuardTail = 300 * time.Millisecond
 
 // AudioContext owns the miniaudio backend context, shared by capture and
 // playback. Device selection and levels are adjustable at runtime.
@@ -31,6 +37,9 @@ type AudioContext struct {
 	micLevel atomic.Uint64 // float64 bits: latest mic-test RMS (0..1)
 	muted    atomic.Bool   // silences playback (persisted; independent of volume)
 	paused   atomic.Bool   // suppress playback entirely; cuts current, holds future
+
+	playing   atomic.Bool  // true while an utterance/sound is playing (half-duplex gate)
+	gateUntil atomic.Int64 // unixnano: capture stays gated until this time after playback
 
 	playMu   sync.Mutex // guards the active playback device
 	playDev  *malgo.Device
@@ -90,6 +99,13 @@ func (a *AudioContext) SetPaused(p bool) {
 
 // Paused reports whether speech output is paused.
 func (a *AudioContext) Paused() bool { return a.paused.Load() }
+
+// captureGated reports whether microphone capture should be discarded right now
+// because playback is active (or just ended). This is the half-duplex guard that
+// stops the recorder from hearing — and transcribing — our own TTS output.
+func (a *AudioContext) captureGated() bool {
+	return a.playing.Load() || time.Now().UnixNano() < a.gateUntil.Load()
+}
 
 // StopPlayback interrupts the currently-playing sound (e.g. a TTS utterance).
 func (a *AudioContext) StopPlayback() {
@@ -168,6 +184,13 @@ func (a *AudioContext) Play(pcm []float32, sampleRate int) error {
 	if len(pcm) == 0 || a.paused.Load() {
 		return nil // paused: drop this utterance rather than play it
 	}
+	// Half-duplex: gate the microphone for the duration of playback (plus a short
+	// tail) so the recorder doesn't capture and transcribe our own output.
+	a.playing.Store(true)
+	defer func() {
+		a.playing.Store(false)
+		a.gateUntil.Store(time.Now().Add(captureGuardTail).UnixNano())
+	}()
 	// Store raw (unscaled) samples; gain/mute are applied per-callback.
 	buf := make([]byte, len(pcm)*4)
 	for i, s := range pcm {
@@ -374,6 +397,11 @@ func (r *MalgoRecorder) Start(ctx context.Context) (<-chan Segment, error) {
 	raw := make(chan []float32, 64) // audio thread -> VAD goroutine
 	cb := malgo.DeviceCallbacks{
 		Data: func(_, in []byte, frames uint32) {
+			// Half-duplex: while our own TTS is playing, discard the mic so we
+			// don't transcribe the speaker output back as user speech.
+			if r.ac.captureGated() {
+				return
+			}
 			n := int(frames)
 			gain := float32(r.ac.inputGain())
 			s := make([]float32, n)
