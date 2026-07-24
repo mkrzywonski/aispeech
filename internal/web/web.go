@@ -177,6 +177,33 @@ func (c *Controls) InstalledVoices() []string {
 	return c.store.Installed(modelstore.Piper)
 }
 
+// sampleGreeting is spoken when previewing a voice in the UI.
+const sampleGreeting = "Hi there! This is what I sound like reading your agent's replies aloud."
+
+// sampleVoice previews a voice by speaking the greeting through the active
+// output. voice must be one of the installed voices (or empty for the default),
+// so the UI can't drive piper at an arbitrary file. Plays in the background.
+func (c *Controls) sampleVoice(voice string) error {
+	if voice != "" {
+		ok := false
+		for _, v := range c.InstalledVoices() {
+			if v == voice {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return errorString("unknown voice")
+		}
+	}
+	go func() {
+		if err := c.svc.SampleVoice(context.Background(), sampleGreeting, voice); err != nil {
+			slog.Warn("sample voice", "err", err)
+		}
+	}()
+	return nil
+}
+
 func (c *Controls) modelOptions() engine.ModelOptions {
 	return engine.ModelOptions{
 		WhisperBin:   c.cfg.WhisperBin,
@@ -441,6 +468,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/audio/pause", g(s.pauseSpeaking))
 	mux.HandleFunc("GET /api/sounds", o(s.soundsGet))
 	mux.HandleFunc("POST /api/sounds/play", g(s.soundsPlay))
+	mux.HandleFunc("POST /api/voice/sample", g(s.voiceSample))
 	mux.HandleFunc("POST /api/sounds/upload", g(s.soundsUpload))
 	mux.HandleFunc("POST /api/sounds/delete", g(s.soundsDelete))
 	mux.HandleFunc("POST /api/mic-test/start", g(s.micTestStart))
@@ -668,6 +696,20 @@ func (s *Server) soundsPlay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.controls.playSound(body.Name)
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+func (s *Server) voiceSample(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Voice string `json:"voice"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.controls.sampleVoice(body.Voice); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

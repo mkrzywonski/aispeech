@@ -412,6 +412,16 @@ func (s *Service) SpeakAs(ctx context.Context, sessionID, text string) (spoken i
 	return s.speakVoice(ctx, text, s.reg.Voice(sessionID), s.reg.Name(sessionID))
 }
 
+// SampleVoice speaks text with a specific voice model through the active output,
+// for a UI preview. Unlike Speak it does not record to the activity log or touch
+// dialog state — it is not agent speech.
+func (s *Service) SampleVoice(ctx context.Context, text, voice string) error {
+	if s.speakCap > 0 && len(text) > s.speakCap {
+		text = text[:s.speakCap]
+	}
+	return s.enqueue(ctx, func(c context.Context) error { return s.speaker().Speak(c, text, voice) })
+}
+
 func (s *Service) speakVoice(ctx context.Context, text, voice, spokenBy string) (spoken int, truncated bool, err error) {
 	if s.speakCap > 0 && len(text) > s.speakCap {
 		text = text[:s.speakCap]

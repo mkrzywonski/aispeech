@@ -114,8 +114,9 @@
   .testrow { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; }
   .sounds { display: flex; flex-direction: column; gap: .3rem; max-width: 520px; }
   .sound-row { display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem; border: 1px solid #8883; border-radius: 8px; }
-  .sound-row .play { display: inline-flex; align-items: center; padding: 2px; border: none; background: none; cursor: pointer; color: #888; }
-  .sound-row .play:hover { color: #2d7cf0; }
+  .play { display: inline-flex; align-items: center; padding: 2px; border: none; background: none; cursor: pointer; color: #888; vertical-align: middle; }
+  .play:hover { color: #2d7cf0; }
+  .play:disabled { opacity: .4; cursor: not-allowed; }
   .sound-row .sname { flex: 1; font-variant-numeric: tabular-nums; }
   .sound-row .badge { font-size: .68rem; padding: .05rem .4rem; border-radius: 999px; border: 1px solid #8888; opacity: .8; }
   .sound-row .badge.custom { background: #8b5cf6; color: #fff; border-color: #8b5cf6; opacity: 1; }
@@ -245,7 +246,7 @@
     <label for="wselect">Speech&#8209;to&#8209;text</label>
     <div><select id="wselect"></select> <span class="pill" id="sttpill"></span></div>
     <label for="pselect">Text&#8209;to&#8209;speech</label>
-    <div><select id="pselect"></select> <span class="pill" id="ttspill"></span></div>
+    <div><select id="pselect"></select> <button id="samplevoice" class="play" title="Sample this voice" aria-label="Sample this voice"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10v4h3l4 4V6L6 10H3z" fill="currentColor" stroke="none"></path><path d="M15 9.5a4 4 0 0 1 0 5"></path><path d="M18 7a8 8 0 0 1 0 10"></path></svg></button> <span class="pill" id="ttspill"></span></div>
     <label for="dlselect">Download</label>
     <div class="testrow">
       <select id="dlselect"></select>
@@ -477,6 +478,11 @@ async function refreshAudio() {
 async function postModels(body) { renderModels(await (await fetch('/api/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()); }
 $('wselect').onchange = (e) => postModels({ whisper_model: e.target.value });
 $('pselect').onchange = (e) => postModels({ piper_voice: e.target.value });
+$('samplevoice').onclick = () => {
+  const voice = $('pselect').value;
+  if (!voice) return;
+  fetch('/api/voice/sample', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice }) });
+};
 $('savemodels').onclick = () => postModels({
   whisper_model: $('wmodel').value.trim(), piper_voice: $('pvoice').value.trim(),
   language: $('lang').value.trim(), whisper_bin: $('wbin').value.trim(), piper_bin: $('pbin').value.trim()
@@ -525,6 +531,7 @@ function optList(paths, current) {
 function renderModels(m) {
   if (document.activeElement !== $('wselect')) $('wselect').innerHTML = optList(m.installed_whisper || [], m.whisper_model || '');
   if (document.activeElement !== $('pselect')) $('pselect').innerHTML = optList(m.installed_piper || [], m.piper_voice || '');
+  $('samplevoice').disabled = !((m.installed_piper || []).length);
   if (document.activeElement !== $('dlselect')) {
     const stt = [], tts = [];
     for (const c of (m.catalog || [])) {
