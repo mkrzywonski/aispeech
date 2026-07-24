@@ -68,25 +68,31 @@ func NewStore(ttl time.Duration) *Store {
 // the one browser principal allowed to drive this hub. Only a known browser
 // session may hold it. The slot frees after operatorTTL of inactivity so a
 // restarted or replacement browser can take over, while an actively-polling
-// operator keeps other browsers out. Returns true if cookie owns the slot after
-// the call.
-func (s *Store) AcquireOperator(cookie string) bool {
+// operator keeps other browsers out.
+//
+// ok reports whether cookie owns the slot after the call. handover reports that
+// this call displaced a *different*, timed-out previous operator — the signal to
+// void that operator's pairings so an incoming browser cannot inherit agents it
+// did not pair itself. Refreshing the same cookie, or the very first claim, is
+// not a handover.
+func (s *Store) AcquireOperator(cookie string) (ok, handover bool) {
 	if cookie == "" {
-		return false
+		return false, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.browsers[cookie]; !ok {
-		return false // not a browser session we issued
+	if _, known := s.browsers[cookie]; !known {
+		return false, false // not a browser session we issued
 	}
 	now := s.now()
-	if s.operatorCookie != "" && s.operatorCookie != cookie && now.Sub(s.operatorSeen) <= s.operatorTTL {
-		return false // another browser actively holds the slot
+	prev := s.operatorCookie
+	if prev != "" && prev != cookie && now.Sub(s.operatorSeen) <= s.operatorTTL {
+		return false, false // another browser actively holds the slot
 	}
 	s.operatorCookie = cookie
 	s.operatorSeen = now
 	s.browsers[cookie] = now
-	return true
+	return true, prev != "" && prev != cookie
 }
 
 // NewBrowser mints a new browser-session cookie id and records it.

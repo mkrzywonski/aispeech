@@ -418,9 +418,19 @@ func (s *Server) Routes(mux *http.ServeMux) {
 func (s *Server) op(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(cookieName)
-		if err != nil || !s.store.AcquireOperator(c.Value) {
+		if err != nil {
 			http.Error(w, "another aispeech UI is the active operator for this hub", http.StatusConflict)
 			return
+		}
+		ok, handover := s.store.AcquireOperator(c.Value)
+		if !ok {
+			http.Error(w, "another aispeech UI is the active operator for this hub", http.StatusConflict)
+			return
+		}
+		if handover {
+			// A different browser took over the hub: void the prior operator's
+			// pairings so this one can't inherit agents it never paired.
+			s.reg.UnpairAll()
 		}
 		h(w, r)
 	}
@@ -553,9 +563,17 @@ func (s *Server) wsAudio(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	c, err := r.Cookie(cookieName)
-	if err != nil || !s.store.AcquireOperator(c.Value) {
+	if err != nil {
 		http.Error(w, "another aispeech UI is the active operator for this hub", http.StatusConflict)
 		return
+	}
+	ok, handover := s.store.AcquireOperator(c.Value)
+	if !ok {
+		http.Error(w, "another aispeech UI is the active operator for this hub", http.StatusConflict)
+		return
+	}
+	if handover {
+		s.reg.UnpairAll()
 	}
 	// Origin is validated above against our own allowlist (tunnels, LAN IPs,
 	// hostname), so skip the library's stricter same-host check.

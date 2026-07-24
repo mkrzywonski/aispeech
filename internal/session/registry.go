@@ -147,6 +147,26 @@ func (r *Registry) NotePairFailure(id string) int {
 	return s.pairFails
 }
 
+// UnpairAll voids every session's pairing. It is called when the UI operator
+// slot changes hands so a new browser cannot inherit agents the previous
+// operator paired: sessions stay connected but must pair again (with the new
+// operator's token) before voice works. Focus is cleared and any pending
+// listen() stops receiving routed speech.
+func (r *Registry) UnpairAll() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.byID {
+		if !s.Paired {
+			continue
+		}
+		s.Paired = false
+		s.Browser = ""
+		s.listen = nil
+		r.noticeLocked("info", fmt.Sprintf("%s unpaired — a new browser took over the hub", s.Name))
+	}
+	r.focusID = ""
+}
+
 // Detach removes a session (on disconnect or revoke).
 func (r *Registry) Detach(id string) {
 	r.mu.Lock()

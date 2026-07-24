@@ -95,6 +95,37 @@ func focusName(r *Registry) string {
 	return ""
 }
 
+func TestUnpairAll(t *testing.T) {
+	r := New()
+	pair(t, r, "id1", "claude") // becomes focus
+	pair(t, r, "id2", "codex")
+	if focusName(r) == "" {
+		t.Fatal("expected a focused session before unpair")
+	}
+
+	r.UnpairAll()
+
+	views, _ := r.Snapshot()
+	if len(views) != 2 {
+		t.Fatalf("sessions should remain connected, got %d", len(views))
+	}
+	for _, v := range views {
+		if v.Paired {
+			t.Fatalf("%s still paired after UnpairAll", v.Name)
+		}
+		if v.Focused {
+			t.Fatalf("%s still focused after UnpairAll", v.Name)
+		}
+	}
+	if focusName(r) != "" {
+		t.Fatal("focus should be cleared after UnpairAll")
+	}
+	// A subsequent listen must be refused until re-pairing.
+	if _, status := r.Listen(context.Background(), "id1", 10*time.Millisecond); status != "unpaired" {
+		t.Fatalf("listen after unpair = %q, want unpaired", status)
+	}
+}
+
 func TestDefaultNameIsSingleWord(t *testing.T) {
 	r := New()
 	s := r.Attach("id1", "claude-code")

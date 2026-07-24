@@ -14,35 +14,36 @@ func TestOperatorSlot(t *testing.T) {
 	s.operatorTTL = time.Minute
 
 	// A cookie must be a known browser session to hold the slot.
-	if s.AcquireOperator("ghost") {
+	if ok, _ := s.AcquireOperator("ghost"); ok {
 		t.Fatal("unknown cookie acquired the operator slot")
 	}
 	a, b := s.NewBrowser(), s.NewBrowser()
 
-	// First known browser claims the slot; a different one is refused while it
-	// stays active.
-	if !s.AcquireOperator(a) {
-		t.Fatal("first browser should claim the slot")
+	// First known browser claims the slot — the very first claim is not a
+	// handover (there is no prior operator to void).
+	if ok, handover := s.AcquireOperator(a); !ok || handover {
+		t.Fatalf("first claim = (%v,%v), want (true,false)", ok, handover)
 	}
-	if s.AcquireOperator(b) {
+	if ok, _ := s.AcquireOperator(b); ok {
 		t.Fatal("second browser must be refused while the first is active")
 	}
-	// The operator keeps it by continuing to poll.
+	// The operator keeps it by continuing to poll — refresh, not handover.
 	now = now.Add(30 * time.Second)
-	if !s.AcquireOperator(a) {
-		t.Fatal("active operator should keep the slot")
+	if ok, handover := s.AcquireOperator(a); !ok || handover {
+		t.Fatalf("refresh = (%v,%v), want (true,false)", ok, handover)
 	}
 	// Still within TTL of the last refresh, the other browser is refused.
-	if s.AcquireOperator(b) {
+	if ok, _ := s.AcquireOperator(b); ok {
 		t.Fatal("slot taken over before idle timeout")
 	}
-	// After the operator goes idle past the TTL, another browser can take over.
+	// After the operator goes idle past the TTL, another browser takes over —
+	// this IS a handover (displaces a different prior operator).
 	now = now.Add(2 * time.Minute)
-	if !s.AcquireOperator(b) {
-		t.Fatal("idle slot should be claimable by another browser")
+	if ok, handover := s.AcquireOperator(b); !ok || !handover {
+		t.Fatalf("takeover = (%v,%v), want (true,true)", ok, handover)
 	}
 	// Now b holds it and a is refused.
-	if s.AcquireOperator(a) {
+	if ok, _ := s.AcquireOperator(a); ok {
 		t.Fatal("previous operator should be refused after handover")
 	}
 }

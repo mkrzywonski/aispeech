@@ -300,11 +300,15 @@ principal (cookie) may drive it at a time** (`authz.AcquireOperator`). The first
 browser to poll claims the slot; every other cookie is refused with `409` on
 *all* UI routes — reads (`/api/state`, `/api/audio`, …), mutations, and the
 `/ws` audio socket alike. The slot frees after ~2 min of inactivity, so a
-restarted or replacement browser can take over without a hub restart. This is
-first-come contention, not identity: a squatter can lock a user out (a visible,
-self-healing DoS) but cannot reach their agent, since pairing still requires
-pasting a token into that agent's own TUI. **For genuine multi-user use, run one
-hub per OS user** on separate ports.
+restarted or replacement browser can take over without a hub restart. When the
+slot changes hands to a **different** browser, the previous operator's pairings
+are **voided** (`Registry.UnpairAll`) — the incoming operator starts with a clean
+hub and cannot inherit and drive agents the departed operator paired; those
+agents stay connected but must re-pair. This is first-come contention, not
+identity: a squatter can lock a user out (a visible, self-healing DoS) but cannot
+reach their agent, since pairing still requires pasting a token into that agent's
+own TUI. **For genuine multi-user use, run one hub per OS user** on separate
+ports.
 
 ### Additional controls
 
