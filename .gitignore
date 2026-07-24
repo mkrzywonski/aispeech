@@ -4,3 +4,4 @@
 *.bin
 models/
 /result
+/.cache/
