@@ -301,8 +301,8 @@ $('devtext').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('devs
 
 // --- audio ---
 async function postAudio(u) { await fetch('/api/audio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(u) }); }
-$('in').onchange = (e) => postAudio({ input_device: e.target.value });
-$('out').onchange = (e) => postAudio({ output_device: e.target.value });
+$('in').onchange = (e) => { braudio.onSelectInput(e.target.value); postAudio({ input_device: e.target.value }); };
+$('out').onchange = (e) => { braudio.onSelectOutput(e.target.value); postAudio({ output_device: e.target.value }); };
 $('vol').oninput = (e) => { $('volv').textContent = fmtPct(e.target.value); };
 $('vol').onchange = (e) => postAudio({ volume: parseFloat(e.target.value) }); // does not unmute
 const PAUSE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>';
@@ -579,6 +579,146 @@ function tickCountdown() {
 }
 setInterval(tickCountdown, 250);
 
+// --- browser audio: use THIS tab's speaker/mic over a WebSocket ---
+// Enabled by selecting "Browser (this tab)" as the Microphone/Speaker. The
+// socket stays open so the hub can play TTS clips here and request mic capture.
+// Playback: the hub sends a "play" JSON frame then a binary float32 clip; we
+// play it via Web Audio (applying the local volume/mute) and ack "played".
+// Capture: on "capture" we run getUserMedia + an AudioWorklet VAD and send each
+// endpointed utterance as utt-start / binary / utt-end.
+const BROWSER_DEVICE = 'Browser (this tab)';
+const braudio = (() => {
+  let ws = null, playCtx = null, gain = null;
+  let pendingPlay = null;    // {id,rate,n} awaiting its binary clip
+  let curSource = null;      // currently-playing AudioBufferSourceNode
+  let cap = null;            // {ctx,stream,node} while capturing
+
+  function wsURL() {
+    return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
+  }
+  function connect() {
+    try { ws = new WebSocket(wsURL()); } catch (e) { return; }
+    ws.binaryType = 'arraybuffer';
+    ws.onmessage = onMessage;
+    ws.onclose = () => { ws = null; setTimeout(connect, 2000); };
+    ws.onerror = () => { try { ws.close(); } catch (e) {} };
+  }
+  function send(obj) { if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj)); }
+
+  function onMessage(ev) {
+    if (typeof ev.data === 'string') { try { onControl(JSON.parse(ev.data)); } catch (e) {} return; }
+    if (pendingPlay) { const p = pendingPlay; pendingPlay = null; playClip(p, ev.data); }
+  }
+  function onControl(m) {
+    if (m.type === 'play') pendingPlay = m;
+    else if (m.type === 'stop') stopPlayback();
+    else if (m.type === 'capture') m.on ? startCapture() : stopCapture();
+  }
+
+  // playback
+  function ensurePlayCtx() {
+    if (!playCtx) {
+      playCtx = new (window.AudioContext || window.webkitAudioContext)();
+      gain = playCtx.createGain(); gain.connect(playCtx.destination);
+    }
+    if (playCtx.state === 'suspended') playCtx.resume();
+    return playCtx;
+  }
+  function playClip(p, buf) {
+    try {
+      const ctx = ensurePlayCtx();
+      const f32 = new Float32Array(buf);
+      const audio = ctx.createBuffer(1, f32.length, p.rate || 16000);
+      audio.copyToChannel(f32, 0);
+      const src = ctx.createBufferSource();
+      src.buffer = audio;
+      gain.gain.value = muted ? 0 : parseFloat($('vol').value || '1');
+      src.connect(gain);
+      curSource = src;
+      src.onended = () => { if (curSource === src) curSource = null; send({ type: 'played', id: p.id }); };
+      src.start();
+    } catch (e) {
+      send({ type: 'played', id: p.id }); // never strand the hub's playback queue
+    }
+  }
+  function stopPlayback() { if (curSource) { try { curSource.stop(); } catch (e) {} curSource = null; } }
+
+  // capture
+  async function startCapture() {
+    if (cap) return;
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      await ctx.audioWorklet.addModule(workletURL());
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+      });
+      const srcNode = ctx.createMediaStreamSource(stream);
+      const node = new AudioWorkletNode(ctx, 'vad-processor');
+      node.port.onmessage = (e) => sendUtterance(e.data);
+      srcNode.connect(node);
+      // Some browsers only pull a worklet that reaches a destination; sink it silently.
+      const sink = ctx.createGain(); sink.gain.value = 0; node.connect(sink); sink.connect(ctx.destination);
+      cap = { ctx, stream, node };
+    } catch (e) { console.warn('browser mic capture failed:', e); }
+  }
+  function stopCapture() {
+    if (!cap) return;
+    try { cap.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+    try { cap.ctx.close(); } catch (e) {}
+    cap = null;
+  }
+  function sendUtterance(pcm) {
+    if (!ws || ws.readyState !== 1 || !pcm || !pcm.length) return;
+    send({ type: 'utt-start' });
+    ws.send(pcm.buffer);       // Float32Array buffer, little-endian (all common platforms)
+    send({ type: 'utt-end' });
+  }
+
+  // The AudioWorklet VAD, mirroring the hub's energy VAD (16 kHz, ~1.4s hangover).
+  function workletURL() {
+    const src = `
+      class VadProcessor extends AudioWorkletProcessor {
+        constructor() { super(); this.block = new Float32Array(320); this.n = 0;
+          this.inSpeech = false; this.utt = []; this.silence = 0; }
+        rms() { let s = 0; for (let i = 0; i < 320; i++) s += this.block[i]*this.block[i]; return Math.sqrt(s/320); }
+        appendBlock() { for (let i = 0; i < 320; i++) this.utt.push(this.block[i]); }
+        finish() {
+          const blocks = Math.floor(this.utt.length/320), u = this.utt;
+          this.utt = []; this.inSpeech = false; this.silence = 0;
+          if (blocks >= 8) this.port.postMessage(Float32Array.from(u));
+        }
+        pushBlock() {
+          const speech = this.rms() > 0.012;
+          if (speech) { this.inSpeech = true; this.silence = 0; this.appendBlock(); }
+          else if (this.inSpeech) { this.appendBlock(); if (++this.silence >= 70) this.finish(); }
+          if (this.utt.length >= 16000*20) this.finish();
+        }
+        process(inputs) {
+          const ch = inputs[0] && inputs[0][0];
+          if (ch) for (let i = 0; i < ch.length; i++) {
+            this.block[this.n++] = ch[i];
+            if (this.n === 320) { this.pushBlock(); this.n = 0; }
+          }
+          return true;
+        }
+      }
+      registerProcessor('vad-processor', VadProcessor);`;
+    return URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+  }
+
+  // Called from the device dropdowns: selecting Browser is a user gesture, so
+  // pre-warm the audio context / mic permission that autoplay policy requires.
+  function onSelectOutput(name) { if (name === BROWSER_DEVICE) ensurePlayCtx(); }
+  function onSelectInput(name) {
+    if (name !== BROWSER_DEVICE) return;
+    navigator.mediaDevices.getUserMedia({ audio: true })
+      .then(s => s.getTracks().forEach(t => t.stop())) // just prompt for permission now
+      .catch(() => {});
+  }
+
+  return { connect, onSelectOutput, onSelectInput };
+})();
+
 // --- main state ---
 function render(state) {
   micHot = state.mic_mode !== 'idle';
@@ -676,6 +816,7 @@ async function refresh() {
 
 setTab(localStorage.getItem('aispeech.tab') === 'settings' ? 'settings' : 'hub');
 initVolume();
+braudio.connect(); // keep a socket open so Browser audio can be claimed anytime
 refresh();
 setInterval(refresh, 600);
 setInterval(refreshAudio, 3000);
