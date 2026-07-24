@@ -3,6 +3,7 @@ module github.com/mkrzywonski/aispeech
 go 1.25.0
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/gen2brain/malgo v0.11.25
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 )
