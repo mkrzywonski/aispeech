@@ -162,6 +162,18 @@ Audio comes from WSLg's PulseAudio; microphone-capture reliability varies by
 setup. You can also run the hub natively on Windows or Linux. Windows/macOS
 builds compile but are less tested than Linux.
 
+## Browser audio (remote / tunnel)
+
+When the hub runs on a different machine than you — over an `ssh -L` tunnel, or
+in WSL2 with the browser on Windows — the local audio devices are on the *hub's*
+machine, not yours. Select **"Browser (this tab)"** as the Microphone and/or
+Speaker in Settings → Audio to use the browser machine's devices instead. Audio
+streams over a WebSocket on the same port (tunnel-friendly, no WebRTC); the
+browser endpoints speech with a VAD and sends discrete utterances, so a mic left
+on for hours only transmits while you talk. Each direction is independent, so
+you can mix a local mic with a browser speaker or vice-versa. See
+[`BROWSER_AUDIO_PLAN.md`](BROWSER_AUDIO_PLAN.md).
+
 ---
 
 ## Architecture

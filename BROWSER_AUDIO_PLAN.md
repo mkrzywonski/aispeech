@@ -1,5 +1,48 @@
 # Browser audio backend plan
 
+## Status (implemented)
+
+Phases 1 and 2 are built and wire together; phase 3 is partial. **Not yet
+live-tested in a browser** — the Go transport/routing has unit tests, but the
+Web Audio / getUserMedia / AudioWorklet paths need a real browser + two
+machines. See "How to test" below.
+
+- **Transport** — `internal/browseraudio`: one WebSocket per tab, JSON control +
+  binary float32 PCM; playback with a "played" ack, capture assembled from
+  utt-start/binary/utt-end. Round-trip tested with a Go WS client.
+- **Engine** — `internal/engine/router.go`: an `AudioRouter` wraps the local
+  malgo `AudioContext` and the bridge, satisfies the web control surface + the
+  `player`/`SoundPlayer` seams, and switches each direction on the
+  **"Browser (this tab)"** pseudo-device. Input additionally hot-swaps the
+  Service recorder (`Service.SetRecorder`). `BrowserRecorder` adapts capture
+  clips to engine `Segment`s. Routing decisions are unit-tested with a fake
+  bridge.
+- **Web** — `GET /ws` (same-origin + known-browser guard) hands the socket to
+  the bridge; `POST /api/audio` claims/releases the tab as the endpoint for a
+  direction using its browser-session cookie.
+- **Frontend** — `assets/index.html`: a socket stays open for the tab's life;
+  playback via Web Audio through a gain node (local volume/mute), capture via
+  getUserMedia (echo cancellation on) + an AudioWorklet running the same energy
+  VAD as the hub.
+
+### How to test (over an ssh -L tunnel)
+
+1. `nix build` and run the hub on the home PC; tunnel `ssh -L 7071:localhost:7071`.
+2. Open `http://localhost:7071` on the work PC; in Settings → Audio, set
+   **Speaker** and/or **Microphone** to "Browser (this tab)" (grant mic access).
+3. Have the agent `speak()` — audio should play on the **work** PC. Turn the mic
+   on and talk — utterances should transcribe on the hub and route as usual.
+
+### Deferred / known gaps (phase 3)
+
+- Browser mic + browser speaker relies on getUserMedia echo cancellation to
+  avoid re-transcribing TTS; no explicit half-duplex gate on the browser path.
+- Multi-tab ownership is last-claim-wins with no UI indication of which tab owns
+  a direction.
+- Volume/mute for browser playback is applied client-side from the current UI
+  state (no live re-gain of an in-flight clip; clips are short).
+- Utterances are sent as one binary frame on VAD-end (not pipelined mid-speech).
+
 ## Goal
 
 Let the aispeech hub use the **browser's** microphone and speaker as an
