@@ -166,7 +166,7 @@ builds compile but are less tested than Linux.
 
 When the hub runs on a different machine than you — over an `ssh -L` tunnel, or
 in WSL2 with the browser on Windows — the local audio devices are on the *hub's*
-machine, not yours. Select **"Browser (this tab)"** as the Microphone and/or
+machine, not yours. Select **"Browser"** as the Microphone and/or
 Speaker in Settings → Audio to use the browser machine's devices instead. Audio
 streams over a WebSocket on the same port (tunnel-friendly, no WebRTC); the
 browser endpoints speech with a VAD and sends discrete utterances, so a mic left

@@ -354,17 +354,29 @@ $('sttpause').oninput = (e) => { $('sttpausev').textContent = fmtSeconds(parseFl
 $('sttpause').onchange = (e) => postAudio({ stt_pause_milliseconds: Math.round(parseFloat(e.target.value) * 1000) });
 
 $('testspk').onclick = () => fetch('/api/audio/test-speaker', { method: 'POST' });
-let micTimer = null;
+let micTimer = null, micBrowserTest = false;
 $('testmic').onclick = async () => {
   if (micTimer) { await stopMicTest(); return; }
-  await fetch('/api/mic-test/start', { method: 'POST' });
   $('testmic').textContent = 'Stop test'; $('testmic').classList.add('active'); $('meter').hidden = false;
-  micTimer = setInterval(pollMicLevel, 90);
+  if ($('in').value === BROWSER_DEVICE) {
+    // Test the browser mic: run its capture (level only, no upload) and read the
+    // worklet's live level, so this reflects the same mic voice actually uses.
+    micBrowserTest = true; braudio.setTest(true);
+    micTimer = setInterval(pollBrowserMic, 90);
+  } else {
+    await fetch('/api/mic-test/start', { method: 'POST' });
+    micTimer = setInterval(pollMicLevel, 90);
+  }
 };
 async function stopMicTest() {
   clearInterval(micTimer); micTimer = null;
-  await fetch('/api/mic-test/stop', { method: 'POST' });
+  if (micBrowserTest) { micBrowserTest = false; braudio.setTest(false); }
+  else { await fetch('/api/mic-test/stop', { method: 'POST' }); }
   $('testmic').textContent = 'Test mic'; $('testmic').classList.remove('active'); $('meter').hidden = true; $('meterfill').style.width = '0%';
+}
+function pollBrowserMic() {
+  const pct = Math.min(100, Math.round(braudio.level() * 500));
+  $('meterfill').style.width = pct + '%'; $('meter').setAttribute('aria-valuenow', pct);
 }
 async function pollMicLevel() {
   try {
@@ -624,25 +636,28 @@ function tickCountdown() {
 setInterval(tickCountdown, 250);
 
 // --- browser audio: use THIS tab's speaker/mic over a WebSocket ---
-// Enabled by selecting "Browser (this tab)" as the Microphone/Speaker. The
+// Enabled by selecting "Browser" as the Microphone/Speaker. The
 // socket stays open so the hub can play TTS clips here and request mic capture.
 // Playback: the hub sends a "play" JSON frame then a binary float32 clip; we
 // play it via Web Audio (applying the local volume/mute) and ack "played".
 // Capture: on "capture" we run getUserMedia + an AudioWorklet VAD and send each
 // endpointed utterance as utt-start / binary / utt-end.
-const BROWSER_DEVICE = 'Browser (this tab)';
+const BROWSER_DEVICE = 'Browser';
 const braudio = (() => {
   let ws = null, playCtx = null, gain = null;
   let pendingPlay = null;    // {id,rate,n} awaiting its binary clip
   let curSource = null;      // currently-playing AudioBufferSourceNode
   let cap = null;            // {ctx,stream,node} while capturing
+  let onOpenCb = null;       // called after every (re)connect, to re-assert claims
 
   function wsURL() {
     return (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws';
   }
-  function connect() {
+  function connect(cb) {
+    if (cb) onOpenCb = cb;
     try { ws = new WebSocket(wsURL()); } catch (e) { return; }
     ws.binaryType = 'arraybuffer';
+    ws.onopen = () => { if (onOpenCb) onOpenCb(); };
     ws.onmessage = onMessage;
     ws.onclose = () => { ws = null; setTimeout(connect, 2000); };
     ws.onerror = () => { try { ws.close(); } catch (e) {} };
@@ -656,8 +671,20 @@ const braudio = (() => {
   function onControl(m) {
     if (m.type === 'play') pendingPlay = m;
     else if (m.type === 'stop') stopPlayback();
-    else if (m.type === 'capture') m.on ? startCapture() : stopCapture();
+    else if (m.type === 'capture') { hubCap = m.on; updateCapture(); }
   }
+  // Capture runs while either the hub (a dialog) or the UI mic-test wants it;
+  // utterances are only sent to the hub when a dialog is active.
+  function updateCapture() {
+    const want = hubCap || testCap;
+    if (want && !cap) startCapture();
+    else if (!want && cap) stopCapture();
+  }
+
+  let capCtx = null;   // persistent 16 kHz capture context (kept resumed)
+  let micLevel = 0;    // latest browser-mic RMS (0..1), for the meter
+  let hubCap = false;  // the hub asked us to capture (a dialog is active)
+  let testCap = false; // the UI mic-test asked us to capture (measure level only)
 
   // playback
   function ensurePlayCtx() {
@@ -671,6 +698,7 @@ const braudio = (() => {
   function playClip(p, buf) {
     try {
       const ctx = ensurePlayCtx();
+      if (ctx.state !== 'running') console.warn('[braudio] play context', ctx.state, '— click the page to resume audio');
       const f32 = new Float32Array(buf);
       const audio = ctx.createBuffer(1, f32.length, p.rate || 16000);
       audio.copyToChannel(f32, 0);
@@ -682,34 +710,52 @@ const braudio = (() => {
       src.onended = () => { if (curSource === src) curSource = null; send({ type: 'played', id: p.id }); };
       src.start();
     } catch (e) {
+      console.warn('[braudio] playClip failed:', e);
       send({ type: 'played', id: p.id }); // never strand the hub's playback queue
     }
   }
   function stopPlayback() { if (curSource) { try { curSource.stop(); } catch (e) {} curSource = null; } }
 
+  // ensureCapCtx builds (once) and resumes the capture context + VAD worklet.
+  // Must be reachable from a user gesture so autoplay policy leaves it running.
+  async function ensureCapCtx() {
+    if (!capCtx) {
+      capCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+      await capCtx.audioWorklet.addModule(workletURL());
+    }
+    if (capCtx.state === 'suspended') await capCtx.resume();
+    return capCtx;
+  }
+  // warm resumes both contexts on any user interaction (sticky activation), so a
+  // context created earlier can't stay suspended.
+  function warm() { try { ensurePlayCtx(); } catch (e) {} if (capCtx && capCtx.state === 'suspended') capCtx.resume(); }
+
   // capture
   async function startCapture() {
     if (cap) return;
     try {
-      const ctx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-      await ctx.audioWorklet.addModule(workletURL());
+      const ctx = await ensureCapCtx();
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
       const srcNode = ctx.createMediaStreamSource(stream);
       const node = new AudioWorkletNode(ctx, 'vad-processor');
-      node.port.onmessage = (e) => sendUtterance(e.data);
+      node.port.onmessage = (e) => {
+        const d = e.data;
+        if (d.utt) { if (hubCap) sendUtterance(d.utt); }
+        else if (d.lvl !== undefined) micLevel = d.lvl;
+      };
       srcNode.connect(node);
       // Some browsers only pull a worklet that reaches a destination; sink it silently.
       const sink = ctx.createGain(); sink.gain.value = 0; node.connect(sink); sink.connect(ctx.destination);
-      cap = { ctx, stream, node };
-    } catch (e) { console.warn('browser mic capture failed:', e); }
+      cap = { stream, srcNode, node };
+    } catch (e) { console.warn('[braudio] capture failed:', e); }
   }
   function stopCapture() {
     if (!cap) return;
     try { cap.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
-    try { cap.ctx.close(); } catch (e) {}
-    cap = null;
+    try { cap.srcNode.disconnect(); cap.node.disconnect(); } catch (e) {}
+    cap = null; micLevel = 0;
   }
   function sendUtterance(pcm) {
     if (!ws || ws.readyState !== 1 || !pcm || !pcm.length) return;
@@ -719,21 +765,24 @@ const braudio = (() => {
   }
 
   // The AudioWorklet VAD, mirroring the hub's energy VAD (16 kHz, ~1.4s hangover).
+  // Posts {utt} on an endpointed utterance and {lvl} ~2x/sec for the level meter.
   function workletURL() {
     const src = `
       class VadProcessor extends AudioWorkletProcessor {
         constructor() { super(); this.block = new Float32Array(320); this.n = 0;
-          this.inSpeech = false; this.utt = []; this.silence = 0; }
+          this.inSpeech = false; this.utt = []; this.silence = 0; this.peak = 0; this.since = 0; }
         rms() { let s = 0; for (let i = 0; i < 320; i++) s += this.block[i]*this.block[i]; return Math.sqrt(s/320); }
         appendBlock() { for (let i = 0; i < 320; i++) this.utt.push(this.block[i]); }
         finish() {
           const blocks = Math.floor(this.utt.length/320), u = this.utt;
           this.utt = []; this.inSpeech = false; this.silence = 0;
-          if (blocks >= 8) this.port.postMessage(Float32Array.from(u));
+          if (blocks >= 8) this.port.postMessage({ utt: Float32Array.from(u) });
         }
         pushBlock() {
-          const speech = this.rms() > 0.012;
-          if (speech) { this.inSpeech = true; this.silence = 0; this.appendBlock(); }
+          const r = this.rms();
+          if (r > this.peak) this.peak = r;
+          if (++this.since >= 25) { this.port.postMessage({ lvl: this.peak }); this.peak = 0; this.since = 0; }
+          if (r > 0.012) { this.inSpeech = true; this.silence = 0; this.appendBlock(); }
           else if (this.inSpeech) { this.appendBlock(); if (++this.silence >= 70) this.finish(); }
           if (this.utt.length >= 16000*20) this.finish();
         }
@@ -750,18 +799,27 @@ const braudio = (() => {
     return URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
   }
 
-  // Called from the device dropdowns: selecting Browser is a user gesture, so
-  // pre-warm the audio context / mic permission that autoplay policy requires.
+  // Selecting a Browser device is a user gesture — create/resume the contexts
+  // and prompt for mic permission now, while a gesture is in scope.
   function onSelectOutput(name) { if (name === BROWSER_DEVICE) ensurePlayCtx(); }
   function onSelectInput(name) {
     if (name !== BROWSER_DEVICE) return;
+    ensureCapCtx().catch(e => console.warn('[braudio] capture context init failed:', e));
     navigator.mediaDevices.getUserMedia({ audio: true })
       .then(s => s.getTracks().forEach(t => t.stop())) // just prompt for permission now
-      .catch(() => {});
+      .catch(e => console.warn('[braudio] mic permission denied:', e));
   }
 
-  return { connect, onSelectOutput, onSelectInput };
+  // setTest toggles capture for the settings mic-test (level only, no upload).
+  function setTest(on) { testCap = on; updateCapture(); }
+
+  return { connect, onSelectOutput, onSelectInput, warm, setTest, level: () => micLevel, capturing: () => !!cap };
 })();
+// Resume audio contexts on the first (and any) user interaction — autoplay
+// policy suspends contexts created outside a gesture, which silently kills
+// browser playback and capture.
+window.addEventListener('pointerdown', braudio.warm);
+window.addEventListener('keydown', braudio.warm);
 
 // --- main state ---
 function render(state) {
@@ -867,7 +925,17 @@ async function refresh() {
 
 setTab(localStorage.getItem('aispeech.tab') === 'settings' ? 'settings' : 'hub');
 initVolume();
-braudio.connect(); // keep a socket open so Browser audio can be claimed anytime
+// Re-assert Browser device selections whenever the socket (re)connects, so a
+// claim that raced the connection (or a reconnect) doesn't silently route audio
+// to the local device. Reads the persisted selection so it works on any tab.
+async function reclaimBrowserAudio() {
+  try {
+    const a = await (await fetch('/api/audio')).json();
+    if (a.output_device === BROWSER_DEVICE) postAudio({ output_device: BROWSER_DEVICE });
+    if (a.input_device === BROWSER_DEVICE) postAudio({ input_device: BROWSER_DEVICE });
+  } catch (e) {}
+}
+braudio.connect(reclaimBrowserAudio); // keep a socket open so Browser audio can be claimed anytime
 refresh();
 setInterval(refresh, 600);
 setInterval(refreshAudio, 3000);

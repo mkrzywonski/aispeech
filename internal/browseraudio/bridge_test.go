@@ -128,6 +128,32 @@ func TestCaptureAssembly(t *testing.T) {
 	}
 }
 
+func TestCaptureLargeClip(t *testing.T) {
+	b, client, cleanup := serveBridge(t)
+	defer cleanup()
+	if !b.ClaimInput("browser1") {
+		t.Fatal("ClaimInput failed")
+	}
+	ctx := context.Background()
+	// ~1 s of audio = 16000 samples * 4 bytes = 64 KB, well past the library's
+	// default 32 KiB read limit. Without SetReadLimit the server would close here.
+	want := make([]float32, 16000)
+	for i := range want {
+		want[i] = float32(i%7) * 0.01
+	}
+	client.Write(ctx, websocket.MessageText, mustJSON(msg{Type: "utt-start"}))
+	client.Write(ctx, websocket.MessageBinary, floatsToBytes(want))
+	client.Write(ctx, websocket.MessageText, mustJSON(msg{Type: "utt-end"}))
+	select {
+	case clip := <-b.Segments():
+		if len(clip.PCM) != len(want) {
+			t.Fatalf("large clip = %d samples, want %d", len(clip.PCM), len(want))
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("large capture clip was dropped (read limit?)")
+	}
+}
+
 func TestCaptureIgnoredFromUnclaimedTab(t *testing.T) {
 	b, client, cleanup := serveBridge(t)
 	defer cleanup()

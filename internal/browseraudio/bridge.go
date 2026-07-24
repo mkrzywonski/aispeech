@@ -33,6 +33,10 @@ import (
 // SampleRate is the fixed capture/playback rate (whisper wants 16 kHz mono).
 const SampleRate = 16000
 
+// maxMessageBytes bounds a single WebSocket message. It must exceed the largest
+// utterance clip (20 s * 16 kHz * float32 ≈ 1.28 MB) with generous margin.
+const maxMessageBytes = 8 << 20 // 8 MiB
+
 // Clip is one captured utterance as mono float32 PCM.
 type Clip struct {
 	PCM        []float32
@@ -93,6 +97,10 @@ func (b *Bridge) Segments() <-chan Clip { return b.segs }
 // read loop until the connection closes or ctx is cancelled. It blocks; call it
 // from the HTTP handler goroutine.
 func (b *Bridge) Serve(ctx context.Context, ws *websocket.Conn, browserID string) error {
+	// An utterance clip is one binary frame — up to ~1.3 MB (20 s * 16 kHz *
+	// 4 bytes). The library's default 32 KiB read limit would close the socket
+	// on the first real utterance, so raise it well past the max clip.
+	ws.SetReadLimit(maxMessageBytes)
 	c := &conn{ws: ws, browser: browserID}
 	b.add(c)
 	defer b.remove(c)

@@ -13,7 +13,7 @@ machines. See "How to test" below.
 - **Engine** — `internal/engine/router.go`: an `AudioRouter` wraps the local
   malgo `AudioContext` and the bridge, satisfies the web control surface + the
   `player`/`SoundPlayer` seams, and switches each direction on the
-  **"Browser (this tab)"** pseudo-device. Input additionally hot-swaps the
+  **"Browser"** pseudo-device. Input additionally hot-swaps the
   Service recorder (`Service.SetRecorder`). `BrowserRecorder` adapts capture
   clips to engine `Segment`s. Routing decisions are unit-tested with a fake
   bridge.
@@ -29,7 +29,7 @@ machines. See "How to test" below.
 
 1. `nix build` and run the hub on the home PC; tunnel `ssh -L 7071:localhost:7071`.
 2. Open `http://localhost:7071` on the work PC; in Settings → Audio, set
-   **Speaker** and/or **Microphone** to "Browser (this tab)" (grant mic access).
+   **Speaker** and/or **Microphone** to "Browser" (grant mic access).
 3. Have the agent `speak()` — audio should play on the **work** PC. Turn the mic
    on and talk — utterances should transcribe on the hub and route as usual.
 
@@ -57,7 +57,7 @@ different machines:
 ## Principles (decisions)
 
 - **Additive, not a replacement.** Local (malgo) devices stay in the list. The
-  browser mic/speaker appear as extra entries — "Browser (this tab)" — in the
+  browser mic/speaker appear as extra entries — "Browser" — in the
   existing Microphone/Speaker dropdowns. Input and output are chosen
   independently.
 - **No WebRTC.** Use `getUserMedia` for capture (that API is part of the same web
@@ -141,7 +141,7 @@ only audio and capture control.
 
 ### Device selection & "which tab owns audio"
 
-- The Microphone/Speaker dropdowns gain a **"Browser (this tab)"** option beside
+- The Microphone/Speaker dropdowns gain a **"Browser"** option beside
   the enumerated local devices. Selecting it switches that direction's backend to
   the browser; a local device switches it back to malgo. The two directions are
   independent.

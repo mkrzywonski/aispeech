@@ -10,8 +10,9 @@ import (
 )
 
 // BrowserDevice is the pseudo-device shown in the Microphone/Speaker dropdowns
-// that routes that direction to the browser tab instead of a local device.
-const BrowserDevice = "Browser (this tab)"
+// that routes that direction to the browser (the operator's tab) instead of a
+// local device.
+const BrowserDevice = "Browser"
 
 // bridge is the browser-audio transport the router and BrowserRecorder depend on
 // (satisfied by *browseraudio.Bridge). Kept as an interface so the routing
