@@ -307,16 +307,17 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 // accurately report whether their reply was spoken. The bounded queue provides
 // backpressure instead of allowing concurrent audio jobs to overlap.
 func (s *Service) Speak(ctx context.Context, text string) (spoken int, truncated bool, err error) {
-	return s.speakVoice(ctx, text, "")
+	return s.speakVoice(ctx, text, "", "")
 }
 
 // SpeakAs speaks using the voice assigned to sessionID (so each agent can have a
-// distinct voice), falling back to the default when unset.
+// distinct voice), falling back to the default when unset. The spoken reply is
+// recorded in the activity log attributed to the session's name.
 func (s *Service) SpeakAs(ctx context.Context, sessionID, text string) (spoken int, truncated bool, err error) {
-	return s.speakVoice(ctx, text, s.reg.Voice(sessionID))
+	return s.speakVoice(ctx, text, s.reg.Voice(sessionID), s.reg.Name(sessionID))
 }
 
-func (s *Service) speakVoice(ctx context.Context, text, voice string) (spoken int, truncated bool, err error) {
+func (s *Service) speakVoice(ctx context.Context, text, voice, spokenBy string) (spoken int, truncated bool, err error) {
 	if s.speakCap > 0 && len(text) > s.speakCap {
 		text = text[:s.speakCap]
 		truncated = true
@@ -324,6 +325,7 @@ func (s *Service) speakVoice(ctx context.Context, text, voice string) (spoken in
 	if err := s.enqueue(ctx, func(c context.Context) error { return s.speaker().Speak(c, text, voice) }); err != nil {
 		return 0, truncated, err
 	}
+	s.reg.RecordSpeech(spokenBy, text)
 	return len(text), truncated, nil
 }
 

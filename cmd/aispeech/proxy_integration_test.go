@@ -65,7 +65,7 @@ func TestProxyBridge(t *testing.T) {
 
 	// status attaches the session at the hub; the identity should be "claude".
 	call(t, ctx, cs, "status", nil)
-	views, _, _ := reg.Snapshot()
+	views, _ := reg.Snapshot()
 	if len(views) != 1 || views[0].ClientName != "claude" {
 		t.Fatalf("hub session = %+v, want one named claude", views)
 	}

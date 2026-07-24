@@ -294,7 +294,7 @@ func (d *deps) endSession(ctx context.Context, req *mcp.CallToolRequest, _ empty
 
 func (d *deps) status(ctx context.Context, req *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, statusOut, error) {
 	v := d.attach(req)
-	views, _, _ := d.reg.Snapshot()
+	views, _ := d.reg.Snapshot()
 	others := make([]string, 0, len(views))
 	for _, o := range views {
 		if o.ID != v.ID && o.Paired {

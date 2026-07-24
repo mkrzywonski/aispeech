@@ -74,7 +74,7 @@
   .smic.on .slash { display: none; }
   .star { color: #2d7cf0; }
 
-  .transcripts { border: 1px solid #8884; border-radius: 8px; padding: .5rem .7rem; max-height: 260px; overflow-y: auto; background: #8880; }
+  .log { border: 1px solid #8884; border-radius: 8px; padding: .5rem .7rem; max-height: 340px; overflow-y: auto; background: #8880; }
   .tr { padding: .25rem 0; border-bottom: 1px solid #8882; display: flex; gap: .6rem; align-items: baseline; }
   .tr:last-child { border-bottom: 0; }
   .tr .t { opacity: .5; font-size: .75rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -83,10 +83,12 @@
   .tag.delivered { background: #30a46c; color: #fff; border-color: #30a46c; }
   .tag.dropped, .tag.no-session { background: #e5484d; color: #fff; border-color: #e5484d; }
   .tag.focus { background: #2d7cf0; color: #fff; border-color: #2d7cf0; }
-
-  .notices { margin-top: 1rem; font-size: .85rem; }
-  .notices li { list-style: none; padding: .12rem 0; opacity: .85; }
-  .notices li.warn { color: #e5484d; opacity: 1; }
+  .tag.spoke { background: #8b5cf6; color: #fff; border-color: #8b5cf6; }
+  /* spoken (TTS) replies read as the agent's own voice */
+  .tr.speech .txt { font-style: italic; opacity: .92; }
+  /* system notices are dimmer than speech; warnings stand out */
+  .tr.notice .txt { opacity: .6; font-size: .85rem; }
+  .tr.notice.warn .txt { color: #e5484d; opacity: 1; }
   .name-in { font: inherit; width: 8rem; padding: .2rem .3rem; border-radius: 5px; border: 1px solid #8888; background: transparent; }
 
   .settings { margin-top: 1.5rem; padding: .5rem 1.2rem 1.2rem; border: 1px solid #8884; border-radius: 12px; background: #8880; }
@@ -162,11 +164,8 @@
 </div>
 <p id="empty" class="muted">No agents connected yet. Start Claude Code with the aispeech MCP server and ask it to use voice.</p>
 
-<h2>Recognized speech</h2>
-<div class="transcripts" id="transcripts" role="log" aria-live="polite" aria-label="Recognized speech"><span class="muted">Nothing heard yet.</span></div>
-
-<h2>Activity</h2>
-<div class="notices"><ul id="notices" role="log" aria-live="polite" aria-label="Activity"><li class="muted">Session connections and pairing events appear here.</li></ul></div>
+<h2>Activity log</h2>
+<div class="log" id="log" role="log" aria-live="polite" aria-label="Activity log"><span class="muted">Recognized speech, spoken replies, and session events appear here.</span></div>
 
 <div id="devbox" class="dev" hidden>
   <strong class="muted">dev inject</strong> — simulate a transcribed utterance (routing test):
@@ -463,37 +462,40 @@ function setFav(hot) {
 const TAG_LABELS = { delivered: 'delivered', dropped: 'dropped · not listening', 'no-session': 'no session in focus', focus: 'focus' };
 const TAG_TIPS = { delivered: 'Routed to the focused session', dropped: 'Target session had no pending listen() call', 'no-session': 'No session is in focus', focus: 'Focus switched by wake word' };
 
-// --- append-only transcript & notice rendering (preserves selection + SR) ---
-const seenTx = new Set(), seenNo = new Set();
-function appendTranscripts(list) {
-  const c = $('transcripts');
+// --- append-only unified log (recognized speech, spoken replies, notices) ---
+const seenLog = new Set();
+function appendLog(list) {
+  const c = $('log');
   const atBottom = c.scrollHeight - c.scrollTop - c.clientHeight < 40;
   let added = false;
-  for (const t of list) {
-    if (seenTx.has(t.at)) continue;
-    seenTx.add(t.at); added = true;
+  for (const e of list) {
+    const key = e.at + '|' + e.kind + '|' + e.text;
+    if (seenLog.has(key)) continue;
+    seenLog.add(key); added = true;
     const ph = c.querySelector('.muted'); if (ph) ph.remove();
-    const div = document.createElement('div'); div.className = 'tr';
-    const to = t.target ? ' → ' + t.target : '';
-    div.innerHTML = `<span class="t">${new Date(t.at).toLocaleTimeString()}</span><span class="txt">${esc(t.text)}</span>` +
-      `<span class="tag ${t.outcome}" title="${esc(TAG_TIPS[t.outcome] || '')}">${esc(TAG_LABELS[t.outcome] || t.outcome)}${esc(to)}</span>`;
-    c.appendChild(div);
+    c.appendChild(renderLogEntry(e));
   }
-  while (c.children.length > 150) c.removeChild(c.firstChild);
+  while (c.children.length > 200) c.removeChild(c.firstChild);
   if (added && atBottom) c.scrollTop = c.scrollHeight;
 }
-function appendNotices(list) {
-  const c = $('notices');
-  for (const n of list) {
-    const key = n.at + '|' + n.text;
-    if (seenNo.has(key)) continue;
-    seenNo.add(key);
-    const ph = c.querySelector('.muted'); if (ph) ph.remove();
-    const li = document.createElement('li'); li.className = n.kind;
-    li.textContent = `${new Date(n.at).toLocaleTimeString()}  ${n.text}`;
-    c.appendChild(li);
+function renderLogEntry(e) {
+  const div = document.createElement('div');
+  const time = `<span class="t">${new Date(e.at).toLocaleTimeString()}</span>`;
+  if (e.kind === 'speech') {
+    div.className = 'tr speech';
+    const who = e.session ? esc(e.session) : 'agent';
+    div.innerHTML = time + `<span class="txt">${esc(e.text)}</span>` +
+      `<span class="tag spoke" title="Spoken aloud">🔊 ${who}</span>`;
+  } else if (e.kind === 'notice') {
+    div.className = 'tr notice' + (e.level === 'warn' ? ' warn' : '');
+    div.innerHTML = time + `<span class="txt">${esc(e.text)}</span>`;
+  } else { // recognized
+    div.className = 'tr recognized';
+    const to = e.session ? ' → ' + e.session : '';
+    div.innerHTML = time + `<span class="txt">${esc(e.text)}</span>` +
+      `<span class="tag ${e.outcome}" title="${esc(TAG_TIPS[e.outcome] || '')}">${esc(TAG_LABELS[e.outcome] || e.outcome)}${esc(to)}</span>`;
   }
-  while (c.children.length > 40) c.removeChild(c.firstChild);
+  return div;
 }
 
 // --- pending pairings ---
@@ -573,8 +575,7 @@ function render(state) {
   const pending = state.sessions.filter(s => !s.paired);
   const paired = state.sessions.filter(s => s.paired);
   renderPending(pending);
-  appendTranscripts(state.transcripts || []);
-  appendNotices(state.notices || []);
+  appendLog(state.log || []);
 
   $('empty').hidden = state.sessions.length > 0;
   // Don't rebuild rows while the user is interacting with a control in them

@@ -65,19 +65,28 @@ func TestBareNameSwitchesFocusOnly(t *testing.T) {
 func TestDropWhenNotListening(t *testing.T) {
 	r := New()
 	pair(t, r, "id1", "claude")   // focused, but never calls listen()
-	r.Deliver("do something")     // no outstanding listen -> dropped (transcript only)
-	_, _, transcripts := r.Snapshot()
-	if len(transcripts) == 0 {
-		t.Fatal("no transcript recorded")
+	r.Deliver("do something")     // no outstanding listen -> dropped (recognized entry only)
+	_, log := r.Snapshot()
+	last, ok := lastOfKind(log, "recognized")
+	if !ok {
+		t.Fatal("no recognized entry recorded")
 	}
-	last := transcripts[len(transcripts)-1]
-	if last.Outcome != "dropped" || last.Target != "claude" || last.Text != "do something" {
-		t.Fatalf("want dropped transcript, got %+v", last)
+	if last.Outcome != "dropped" || last.Session != "claude" || last.Text != "do something" {
+		t.Fatalf("want dropped recognized entry, got %+v", last)
 	}
 }
 
+func lastOfKind(log []LogEntry, kind string) (LogEntry, bool) {
+	for i := len(log) - 1; i >= 0; i-- {
+		if log[i].Kind == kind {
+			return log[i], true
+		}
+	}
+	return LogEntry{}, false
+}
+
 func focusName(r *Registry) string {
-	views, _, _ := r.Snapshot()
+	views, _ := r.Snapshot()
 	for _, v := range views {
 		if v.Focused {
 			return v.Name

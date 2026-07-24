@@ -40,19 +40,20 @@ type Session struct {
 	listen chan Utterance
 }
 
-// Notice is a transient event surfaced in the UI (e.g. "claude isn't listening").
-type Notice struct {
-	At   time.Time `json:"at"`
-	Kind string    `json:"kind"` // info | warn
-	Text string    `json:"text"`
-}
-
-// Transcript is a recognized utterance and what routing did with it.
-type Transcript struct {
+// LogEntry is one line in the unified activity log. Kind determines which
+// optional fields are meaningful:
+//
+//	recognized — a transcribed utterance; Session is the routed target,
+//	             Outcome is one of delivered | dropped | focus | no-session.
+//	speech     — a spoken (TTS) reply; Session is the agent that spoke.
+//	notice     — a session/pairing event; Level is info | warn.
+type LogEntry struct {
 	At      time.Time `json:"at"`
-	Text    string    `json:"text"`             // recognized speech
-	Target  string    `json:"target,omitempty"` // session it was routed to
-	Outcome string    `json:"outcome"`          // delivered | dropped | focus | no-session
+	Kind    string    `json:"kind"` // recognized | speech | notice
+	Text    string    `json:"text"`
+	Session string    `json:"session,omitempty"`
+	Outcome string    `json:"outcome,omitempty"`
+	Level   string    `json:"level,omitempty"`
 }
 
 // Registry is the concurrency-safe source of truth for sessions and focus.
@@ -60,9 +61,8 @@ type Registry struct {
 	mu          sync.Mutex
 	byID        map[string]*Session
 	focusID     string
-	voiceSeq    int          // rotates voice assignment when all are in use
-	notices     []Notice     // ring buffer, newest last
-	transcripts []Transcript // ring buffer, newest last
+	voiceSeq    int        // rotates voice assignment when all are in use
+	log         []LogEntry // unified activity log ring buffer, newest last
 }
 
 // New returns an empty Registry.
@@ -332,9 +332,9 @@ func (r *Registry) Get(id string) (SessionView, bool) {
 	}, true
 }
 
-// Snapshot returns the current sessions, recent notices, and recent transcripts
-// for the UI.
-func (r *Registry) Snapshot() ([]SessionView, []Notice, []Transcript) {
+// Snapshot returns the current sessions and the recent unified activity log
+// (recognized speech, spoken replies, and notices in chronological order).
+func (r *Registry) Snapshot() ([]SessionView, []LogEntry) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	views := make([]SessionView, 0, len(r.byID))
@@ -350,9 +350,30 @@ func (r *Registry) Snapshot() ([]SessionView, []Notice, []Transcript) {
 		})
 	}
 	sort.Slice(views, func(i, j int) bool { return views[i].Name < views[j].Name })
-	notices := append([]Notice(nil), r.notices...)
-	transcripts := append([]Transcript(nil), r.transcripts...)
-	return views, notices, transcripts
+	log := append([]LogEntry(nil), r.log...)
+	return views, log
+}
+
+// Name returns a session's display name, or "" if unknown.
+func (r *Registry) Name(id string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if s := r.byID[id]; s != nil {
+		return s.Name
+	}
+	return ""
+}
+
+// RecordSpeech logs a spoken (TTS) reply in the activity log, attributed to the
+// speaking agent by name.
+func (r *Registry) RecordSpeech(name, text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.logLocked(LogEntry{Kind: "speech", Session: name, Text: text})
 }
 
 // --- internal helpers (call with r.mu held) ---
@@ -401,18 +422,20 @@ func (r *Registry) uniqueNameLocked(base string) string {
 	}
 }
 
-func (r *Registry) noticeLocked(kind, text string) {
-	r.notices = append(r.notices, Notice{At: time.Now(), Kind: kind, Text: text})
-	const maxNotices = 50
-	if len(r.notices) > maxNotices {
-		r.notices = r.notices[len(r.notices)-maxNotices:]
+const maxLog = 200
+
+func (r *Registry) logLocked(e LogEntry) {
+	e.At = time.Now()
+	r.log = append(r.log, e)
+	if len(r.log) > maxLog {
+		r.log = r.log[len(r.log)-maxLog:]
 	}
 }
 
+func (r *Registry) noticeLocked(level, text string) {
+	r.logLocked(LogEntry{Kind: "notice", Level: level, Text: text})
+}
+
 func (r *Registry) transcriptLocked(text, target, outcome string) {
-	r.transcripts = append(r.transcripts, Transcript{At: time.Now(), Text: text, Target: target, Outcome: outcome})
-	const maxTranscripts = 100
-	if len(r.transcripts) > maxTranscripts {
-		r.transcripts = r.transcripts[len(r.transcripts)-maxTranscripts:]
-	}
+	r.logLocked(LogEntry{Kind: "recognized", Text: text, Session: target, Outcome: outcome})
 }

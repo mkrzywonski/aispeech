@@ -45,7 +45,7 @@ func TestPairListenDeliver(t *testing.T) {
 	}
 
 	// The session is pending; a code is no longer exposed anywhere.
-	views, _, _ := reg.Snapshot()
+	views, _ := reg.Snapshot()
 	if len(views) != 1 || views[0].Paired {
 		t.Fatalf("want 1 pending session, got %+v", views)
 	}
