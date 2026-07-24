@@ -199,9 +199,9 @@ func (r *AudioRouter) SetPaused(p bool) {
 	}
 }
 
-// TestSpeaker plays a chime through the active output backend.
+// TestSpeaker plays a short sound through the active output backend.
 func (r *AudioRouter) TestSpeaker() error {
-	_, err := r.PlaySound(context.Background(), "chime", "")
+	_, err := r.PlaySound(context.Background(), "success", "")
 	return err
 }
 

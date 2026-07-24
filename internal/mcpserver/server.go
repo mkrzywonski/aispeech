@@ -115,9 +115,9 @@ func (d *deps) build() *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "play_sound",
-		Description: "Play a short sound through the speaker for a notification — e.g. task done, " +
-			"needs attention, an alarm. Either a built-in sound (name = chime, success, error, " +
-			"alert, alarm, ding) or an absolute path to a WAV file. Respects the user's volume/mute. " +
+		Description: "Play a short sound through the speaker for a notification — e.g. task done or " +
+			"needs attention. Either a built-in sound (name = success, error, ding), a user-added " +
+			"custom sound by name, or an absolute path to a WAV file. Respects the user's volume/mute. " +
 			"Use sparingly; for spoken words use speak/converse instead.",
 	}, d.playSound)
 
@@ -285,7 +285,7 @@ func (d *deps) speak(ctx context.Context, req *mcp.CallToolRequest, in speakIn) 
 }
 
 type playSoundIn struct {
-	Sound string `json:"sound,omitempty" jsonschema:"a built-in sound: chime, success, error, alert, alarm, ding"`
+	Sound string `json:"sound,omitempty" jsonschema:"a built-in sound: success, error, ding (or a custom sound name)"`
 	File  string `json:"file,omitempty" jsonschema:"absolute path to a WAV file to play instead of a built-in sound"`
 }
 type playSoundOut struct {

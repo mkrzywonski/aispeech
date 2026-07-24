@@ -264,9 +264,9 @@ func (a *AudioContext) Play(ctx context.Context, pcm []float32, sampleRate int) 
 	return nil
 }
 
-// TestSpeaker plays a short chime through the selected output at current volume.
+// TestSpeaker plays a short sound through the selected output at current volume.
 func (a *AudioContext) TestSpeaker() error {
-	_, err := a.PlaySound(context.Background(), "chime", "")
+	_, err := a.PlaySound(context.Background(), "success", "")
 	return err
 }
 

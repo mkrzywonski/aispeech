@@ -50,7 +50,7 @@ func TestPlaybackSerialized(t *testing.T) {
 			if i%2 == 0 {
 				_, _, _ = svc.Speak(context.Background(), "hi")
 			} else {
-				_, _ = svc.PlaySound(context.Background(), "chime", "")
+				_, _ = svc.PlaySound(context.Background(), "success", "")
 			}
 		}(i)
 	}

@@ -23,16 +23,10 @@ const soundRate = 44100
 // exponential decay), tuned to musical intervals so they read as pleasant
 // notifications rather than raw beeps.
 var soundCatalog = map[string][]note{
-	// gentle rising bell, a perfect fifth up, with a lingering ring
-	"chime": {{659.25, 0.24}, {987.77, 0.75}}, // E5 -> B5
 	// bright ascending major arpeggio — a satisfied "done"
 	"success": {{523.25, 0.13}, {659.25, 0.13}, {783.99, 0.13}, {1046.50, 0.7}}, // C5 E5 G5 C6
 	// soft descending step — "nope" without a harsh buzz
 	"error": {{493.88, 0.17}, {329.63, 0.6}}, // B4 -> E4
-	// two soft attention taps
-	"alert": {{880.00, 0.16}, {0, 0.05}, {880.00, 0.55}}, // A5
-	// urgent but still musical — a quick triple with a ring-out
-	"alarm": {{987.77, 0.13}, {0, 0.05}, {987.77, 0.13}, {0, 0.05}, {987.77, 0.13}, {0, 0.05}, {987.77, 0.5}}, // B5 x4
 	// one clean, bright bell
 	"ding": {{1046.50, 0.7}}, // C6
 }
