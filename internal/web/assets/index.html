@@ -19,8 +19,11 @@
   button.primary { background: #2d7cf0; color: #fff; border-color: #2d7cf0; }
   button:disabled { opacity: .5; cursor: not-allowed; }
   button.active { background: #e5484d; color: #fff; border-color: #e5484d; }
-  .gear { font-size: .85rem; position: relative; }
-  .gear.attn::after { content: ''; position: absolute; top: -3px; right: -3px; width: 9px; height: 9px; border-radius: 50%; background: #f5a623; }
+  .tabs { display: inline-flex; gap: .2rem; background: #8881; border: 1px solid #8884; border-radius: 9px; padding: 2px; }
+  .tab { font: inherit; font-size: .85rem; padding: .3rem .8rem; border: none; background: none; color: inherit; cursor: pointer; border-radius: 7px; position: relative; opacity: .65; }
+  .tab:hover { opacity: .9; }
+  .tab[aria-selected="true"] { background: #8883; opacity: 1; font-weight: 600; }
+  .tab.attn::after { content: ''; position: absolute; top: 0; right: 1px; width: 8px; height: 8px; border-radius: 50%; background: #f5a623; }
   .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
   .banner { padding: .7rem 1rem; border-radius: 10px; margin-bottom: 1rem; }
@@ -116,7 +119,11 @@
 </style>
 </head>
 <body>
-<h1>aispeech <small>local voice hub</small><span class="spacer"></span><button class="gear" id="gear" aria-expanded="false">⚙ Settings</button></h1>
+<h1>aispeech <small>local voice hub</small><span class="spacer"></span>
+  <span class="tabs" role="tablist" aria-label="View">
+    <button class="tab" id="tab-hub" role="tab" aria-selected="true" aria-controls="hubview">Hub</button>
+    <button class="tab" id="tab-settings" role="tab" aria-selected="false" aria-controls="settings">⚙ Settings</button>
+  </span></h1>
 
 <div class="banner err" id="disconnected" hidden role="alert">⚠ Disconnected from aispeech — the app may have stopped. Displayed state is stale.</div>
 
@@ -128,7 +135,8 @@
 <!-- Pending pairings -->
 <div id="pending"></div>
 
-<!-- PTT + sessions: primary -->
+<!-- Hub view: PTT + sessions + activity (primary) -->
+<div id="hubview" role="tabpanel" aria-labelledby="tab-hub">
 <div class="ptt">
   <div class="ptt-row">
   <button id="mic" class="mic" aria-pressed="false" aria-label="Start listening" title="Start listening">
@@ -180,9 +188,10 @@
   <strong class="muted">dev inject</strong> — simulate a transcribed utterance (routing test):
   <div style="margin-top:.5rem"><input id="devtext" placeholder='e.g. "claude, run the tests"'> <button id="devsend">Inject</button></div>
 </div>
+</div><!-- /hubview -->
 
-<!-- Settings drawer -->
-<div class="settings" id="settings" hidden>
+<!-- Settings view -->
+<div class="settings" id="settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
   <h2>Connect AI agents</h2>
   <p class="hint">Register this hub with your AI CLIs. Endpoint: <code id="mcpurl"></code></p>
   <div class="tablewrap"><table><tbody id="agentrows"></tbody></table></div>
@@ -259,15 +268,19 @@ async function post(path, body) {
   refresh();
 }
 
-// --- settings drawer (remembers open/closed) ---
-function setDrawer(open) {
-  $('settings').hidden = !open;
-  $('gear').setAttribute('aria-expanded', String(open));
-  localStorage.setItem('aispeech.settings', open ? '1' : '0');
-  if (open) { refreshAudio(); refreshModels(); refreshInstall(); }
+// --- Hub / Settings tabs (remembers selected view) ---
+function setTab(tab) {
+  const settings = tab === 'settings';
+  $('hubview').hidden = settings;
+  $('settings').hidden = !settings;
+  $('tab-hub').setAttribute('aria-selected', String(!settings));
+  $('tab-settings').setAttribute('aria-selected', String(settings));
+  localStorage.setItem('aispeech.tab', tab);
+  if (settings) { refreshAudio(); refreshModels(); refreshInstall(); }
 }
-$('gear').onclick = () => setDrawer($('settings').hidden);
-$('voicewarnbtn').onclick = () => { setDrawer(true); $('settings').scrollIntoView({ behavior: 'smooth' }); };
+$('tab-hub').onclick = () => setTab('hub');
+$('tab-settings').onclick = () => setTab('settings');
+$('voicewarnbtn').onclick = () => setTab('settings');
 
 // --- PTT ---
 let micHot = false;
@@ -608,7 +621,7 @@ function render(state) {
   } else {
     $('voicewarn').hidden = true; $('mic').disabled = false;
   }
-  $('gear').classList.toggle('attn', !state.stt_ready || !state.tts_ready);
+  $('tab-settings').classList.toggle('attn', !state.stt_ready || !state.tts_ready);
 
   const pending = state.sessions.filter(s => !s.paired);
   const paired = state.sessions.filter(s => s.paired);
@@ -661,7 +674,7 @@ async function refresh() {
   } catch (e) { if (++failures >= 2) setConnected(false); }
 }
 
-if (localStorage.getItem('aispeech.settings') === '1') setDrawer(true);
+setTab(localStorage.getItem('aispeech.tab') === 'settings' ? 'settings' : 'hub');
 initVolume();
 refresh();
 setInterval(refresh, 600);
