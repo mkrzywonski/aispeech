@@ -218,6 +218,26 @@ func (s *Service) DialogCountdown() (remaining, total time.Duration, active bool
 	return remaining, s.dialogTO, true
 }
 
+// UtteranceProgressor is an optional Recorder capability: how far the current
+// utterance is toward the length cap. The local mic implements it; the browser
+// mic (which endpoints in the tab) does not.
+type UtteranceProgressor interface {
+	UtteranceProgress() (elapsed, total time.Duration, active bool)
+}
+
+// UtteranceCountdown reports the current utterance's progress toward the
+// length cap, for the UI countdown next to the listening mic. active is false
+// when nothing is being captured or the recorder can't report progress.
+func (s *Service) UtteranceCountdown() (elapsed, total time.Duration, active bool) {
+	s.mu.Lock()
+	rec := s.rec
+	s.mu.Unlock()
+	if p, ok := rec.(UtteranceProgressor); ok {
+		return p.UtteranceProgress()
+	}
+	return 0, 0, false
+}
+
 // SetTranscriber swaps the STT engine at runtime.
 func (s *Service) SetTranscriber(t Transcriber) {
 	if t == nil {

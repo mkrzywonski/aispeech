@@ -84,6 +84,9 @@
   .smic.on svg { color: #30a46c; }
   .smic .slash { display: inline; }
   .smic.on .slash { display: none; }
+  /* depleting bar next to the mic: time left before an utterance hits the 20s cap */
+  .uttcd { display: inline-block; width: 42px; height: 5px; margin-left: 6px; border-radius: 3px; background: #8883; vertical-align: middle; overflow: hidden; }
+  .uttcd-fill { display: block; height: 100%; width: 100%; background: #30a46c; transition: width .25s linear, background .25s linear; }
   .star { color: #2d7cf0; }
 
   .log { border: 1px solid #8884; border-radius: 8px; padding: .5rem .7rem; max-height: 340px; overflow-y: auto; background: #8880; }
@@ -803,6 +806,37 @@ function tickCountdown() {
 }
 setInterval(tickCountdown, 250);
 
+// --- utterance countdown: time left before the current utterance hits the 20s
+// cap. Shown as a small depleting bar beside the focused session's mic icon and
+// animated locally between polls, mirroring the idle countdown. ---
+let utt = { active: false, elapsed: 0, total: 0, syncAt: 0 };
+function syncUtterance(state) {
+  utt = {
+    active: !!state.utterance_active,
+    elapsed: state.utterance_elapsed_seconds || 0,
+    total: state.utterance_total_seconds || 0,
+    syncAt: performance.now(),
+  };
+}
+function uttFrac() { // fraction of the window remaining (1 = fresh, 0 = cut off)
+  if (!utt.active || utt.total <= 0) return 0;
+  const el = utt.elapsed + (performance.now() - utt.syncAt) / 1000;
+  return Math.max(0, Math.min(1, (utt.total - el) / utt.total));
+}
+function uttBar(s) { // markup for the focused session's mic cell only
+  if (!s.focused || !utt.active || utt.total <= 0) return '';
+  const pct = (uttFrac() * 100).toFixed(1);
+  return `<span class="uttcd" title="Time left before your turn is cut off"><span class="uttcd-fill" id="uttfill" style="width:${pct}%"></span></span>`;
+}
+function tickUtterance() {
+  const fill = document.getElementById('uttfill');
+  if (!fill) return;
+  const frac = uttFrac();
+  fill.style.width = (frac * 100).toFixed(1) + '%';
+  fill.style.background = frac < 0.15 ? '#e5484d' : (frac < 0.35 ? '#f5a623' : '#30a46c');
+}
+setInterval(tickUtterance, 250);
+
 // --- browser audio: use THIS tab's speaker/mic over a WebSocket ---
 // Enabled by selecting "Browser" as the Microphone/Speaker. The
 // socket stays open so the hub can play TTS clips here and request mic capture.
@@ -1004,6 +1038,7 @@ function render(state) {
   if (document.activeElement !== $('idleenabled')) $('idleenabled').checked = !!state.dialog_timeout_enabled;
   $('idlemin').disabled = !state.dialog_timeout_enabled;
   syncCountdown(state);
+  syncUtterance(state);
   $('devbox').hidden = !state.dev_inject;
 
   // Agent-listening status: distinct from mic-on. The mic can be hot while the
@@ -1053,7 +1088,7 @@ function render(state) {
       tr.innerHTML = `
         <td><input class="name-in" value="${esc(s.name)}" data-rename="${s.id}" aria-label="Session name (wake word)"></td>
         <td class="muted">${esc(s.client_name)}</td>
-        <td>${micIcon(s.listening)}</td>
+        <td>${micIcon(s.listening)}${uttBar(s)}</td>
         <td>${focusCell}</td>
         <td>${voiceSelect(s, state.voices)}</td>
         <td><button data-revoke="${s.id}">revoke</button></td>`;

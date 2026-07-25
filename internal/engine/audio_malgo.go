@@ -377,6 +377,19 @@ type MalgoRecorder struct {
 	dev         *malgo.Device
 	stop        chan struct{}
 	pauseBlocks atomic.Int64
+	uttSamples  atomic.Int64 // length of the in-progress utterance (0 = none)
+}
+
+// UtteranceProgress reports how far the current utterance is toward the length
+// cap, for the UI countdown. active is false when nothing is being captured.
+func (r *MalgoRecorder) UtteranceProgress() (elapsed, total time.Duration, active bool) {
+	total = time.Duration(vadMaxSamp) * time.Second / time.Duration(captureRate)
+	n := r.uttSamples.Load()
+	if n <= 0 {
+		return 0, total, false
+	}
+	elapsed = time.Duration(n) * time.Second / time.Duration(captureRate)
+	return elapsed, total, true
 }
 
 // NewMalgoRecorder builds a recorder on the shared audio context.
@@ -457,6 +470,7 @@ func (r *MalgoRecorder) Start(ctx context.Context) (<-chan Segment, error) {
 	}
 	r.dev = dev
 	r.stop = make(chan struct{})
+	r.uttSamples.Store(0)
 
 	out := make(chan Segment, 4)
 	go r.process(ctx, raw, out)
@@ -473,13 +487,16 @@ func (r *MalgoRecorder) Stop() error {
 	close(r.stop)
 	r.dev.Uninit()
 	r.dev = nil
+	r.uttSamples.Store(0)
 	return nil
 }
 
 // process runs the VAD over incoming audio and emits Segments.
 func (r *MalgoRecorder) process(ctx context.Context, raw <-chan []float32, out chan<- Segment) {
 	defer close(out)
+	defer r.uttSamples.Store(0)
 	v := newVAD(&r.pauseBlocks)
+	v.uttSamples = &r.uttSamples
 	for {
 		select {
 		case <-ctx.Done():
@@ -508,6 +525,7 @@ type vad struct {
 	utt         []float32
 	silence     int // consecutive silent blocks while in speech
 	pauseBlocks *atomic.Int64
+	uttSamples  *atomic.Int64 // optional: published in-progress utterance length
 }
 
 const (
@@ -561,6 +579,9 @@ func (v *vad) push(samples []float32) []vadResult {
 				done = append(done, vadResult{pcm: u, capped: true})
 			}
 		}
+	}
+	if v.uttSamples != nil {
+		v.uttSamples.Store(int64(len(v.utt)))
 	}
 	return done
 }
