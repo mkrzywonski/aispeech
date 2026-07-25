@@ -1088,10 +1088,13 @@ function render(state) {
   appendLog(state.log || []);
 
   $('empty').hidden = state.sessions.length > 0;
-  // Don't rebuild rows while the user is interacting with a control in them
-  // (renaming, choosing a voice) — it would clobber the open input/dropdown.
+  // Don't rebuild rows while the user is mid-edit in one (renaming, choosing a
+  // voice) — it would clobber the open input/dropdown. A focused button (e.g.
+  // the focus star) must NOT block the rebuild, or its star won't visibly move.
   const rows = $('rows');
-  if (!rows.contains(document.activeElement)) {
+  const ae = document.activeElement;
+  const editing = ae && rows.contains(ae) && /^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName);
+  if (!editing) {
     rows.innerHTML = '';
     for (const s of paired) {
       const tr = document.createElement('tr');
