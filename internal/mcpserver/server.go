@@ -252,6 +252,7 @@ func (d *deps) listen(ctx context.Context, req *mcp.CallToolRequest, in listenIn
 	if !v.Paired {
 		return nil, listenOut{}, errUnpaired
 	}
+	d.svc.PlayCue(ctx, engine.CueListen) // "go" beep so the user knows to speak
 	u, status := d.reg.Listen(ctx, req.Session.ID(), d.timeout(in.TimeoutSeconds))
 	return waitResult(u, status)
 }
@@ -268,6 +269,7 @@ func (d *deps) converse(ctx context.Context, req *mcp.CallToolRequest, in conver
 			return nil, listenOut{}, fmt.Errorf("speak failed: %w", err)
 		}
 	}
+	d.svc.PlayCue(ctx, engine.CueListen) // "go" beep after the reply, before we listen
 	u, status := d.reg.Listen(ctx, req.Session.ID(), d.timeout(in.TimeoutSeconds))
 	return waitResult(u, status)
 }

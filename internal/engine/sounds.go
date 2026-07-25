@@ -31,7 +31,23 @@ var soundCatalog = map[string][]note{
 	"ding": {{1046.50, 0.7}}, // C6
 }
 
-// SoundNames returns the built-in sound names, sorted.
+// Cue names for functional earcons. These are played through the normal sound
+// path (so they honor mute) but are intentionally kept out of the notification
+// sound list — they are signals, not user-customizable notifications.
+const (
+	CueListen = "listen" // short "go" beep when a session starts listening
+	CueCutoff = "cutoff" // descending boop when an utterance hits the length cap
+)
+
+// cueCatalog holds the functional earcons, separate from soundCatalog so they
+// don't appear in the Settings sound list.
+var cueCatalog = map[string][]note{
+	"listen": {{880.00, 0.16}},                 // one clear beep — "listening, go" (A5)
+	"cutoff": {{440.00, 0.10}, {220.00, 0.22}}, // descending "you were cut off" (A4 -> A3)
+}
+
+// SoundNames returns the built-in notification sound names, sorted. Cue earcons
+// are deliberately excluded.
 func SoundNames() []string {
 	names := make([]string, 0, len(soundCatalog))
 	for n := range soundCatalog {
@@ -41,9 +57,13 @@ func SoundNames() []string {
 	return names
 }
 
-// generateSound renders a named built-in sound to mono float32 PCM.
+// generateSound renders a named built-in sound (notification or cue) to mono
+// float32 PCM.
 func generateSound(name string) (pcm []float32, sampleRate int, ok bool) {
 	notes, ok := soundCatalog[name]
+	if !ok {
+		notes, ok = cueCatalog[name]
+	}
 	if !ok {
 		return nil, 0, false
 	}

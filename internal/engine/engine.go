@@ -33,6 +33,7 @@ type Recorder interface {
 type Segment struct {
 	PCM        []float32
 	SampleRate int
+	Capped     bool // ended by the max-length cap, not a natural pause
 }
 
 // Transcriber turns a PCM segment into text (STT).
@@ -265,6 +266,23 @@ func (s *Service) PlaySound(ctx context.Context, name, file string) (string, err
 	return label, err
 }
 
+// PlayCue plays a short functional earcon (e.g. start-of-listen, cutoff) through
+// the sound path, so it honors mute like any other output. Unlike PlaySound it
+// does not touch dialog state and ignores errors — a cue is best-effort. It
+// blocks until the tone finishes (so callers can order it before listening).
+func (s *Service) PlayCue(ctx context.Context, name string) {
+	s.engMu.RLock()
+	p := s.sound
+	s.engMu.RUnlock()
+	if p == nil {
+		return
+	}
+	_ = s.enqueue(ctx, func(c context.Context) error {
+		_, e := p.PlaySound(c, name, "")
+		return e
+	})
+}
+
 func (s *Service) transcriber() Transcriber {
 	s.engMu.RLock()
 	defer s.engMu.RUnlock()
@@ -370,6 +388,11 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 		case seg, ok := <-segs:
 			if !ok {
 				return
+			}
+			if seg.Capped {
+				// The utterance hit the length cap mid-speech; let the user know
+				// their turn was cut so they aren't talking into the void.
+				go s.PlayCue(context.Background(), CueCutoff)
 			}
 			text, err := s.transcriber().Transcribe(ctx, seg)
 			if err != nil {
