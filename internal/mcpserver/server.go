@@ -34,29 +34,53 @@ type deps struct {
 	voices func() []string // installed TTS voices, for distinct per-session assignment
 	opts   Options
 
-	cueMu     sync.Mutex      // guards lastEmpty
-	lastEmpty map[string]bool // per session: did the previous listen end empty (timeout)?
+	cueMu sync.Mutex            // guards cue
+	cue   map[string]*cueState // per-session beep bookkeeping
 }
 
+type cueState struct {
+	lastEmpty bool      // did the previous listen end empty (timeout)?
+	lastBeep  time.Time // when the start beep last played for this session
+}
+
+// rePromptAfter re-prompts the user with a beep even during a continuation once
+// this much time has passed since the last beep, so a long idle wait isn't
+// left in total silence.
+const rePromptAfter = 15 * time.Second
+
 // beepForListen reports whether to play the start-of-listen beep. A listen that
-// merely continues after an empty (timed-out) listen is not a fresh turn, so it
-// stays silent. fresh forces a beep (the caller just spoke, e.g. converse).
+// merely continues after an empty (timed-out) listen stays silent — unless it's
+// been rePromptAfter since the last beep, in which case we re-prompt. fresh
+// forces a beep (the caller just spoke, e.g. converse).
 func (d *deps) beepForListen(id string, fresh bool) bool {
 	d.cueMu.Lock()
 	defer d.cueMu.Unlock()
-	if fresh {
-		d.lastEmpty[id] = false
-		return true
+	st := d.cue[id]
+	if st == nil {
+		st = &cueState{}
+		d.cue[id] = st
 	}
-	return !d.lastEmpty[id]
+	if fresh {
+		st.lastEmpty = false
+	}
+	beep := fresh || !st.lastEmpty || time.Since(st.lastBeep) >= rePromptAfter
+	if beep {
+		st.lastBeep = time.Now()
+	}
+	return beep
 }
 
 // noteListenEnd records whether a listen ended empty (timed out), so the next
 // listen for this session can tell a continuation from a fresh turn.
 func (d *deps) noteListenEnd(id, status string) {
 	d.cueMu.Lock()
-	d.lastEmpty[id] = status == "timeout"
-	d.cueMu.Unlock()
+	defer d.cueMu.Unlock()
+	st := d.cue[id]
+	if st == nil {
+		st = &cueState{}
+		d.cue[id] = st
+	}
+	st.lastEmpty = status == "timeout"
 }
 
 // NewHandler builds the MCP HTTP handler. A single logical server is shared
@@ -73,7 +97,7 @@ func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, 
 	if opts.Version == "" {
 		opts.Version = "dev"
 	}
-	d := &deps{reg: reg, svc: svc, store: store, voices: voices, opts: opts, lastEmpty: map[string]bool{}}
+	d := &deps{reg: reg, svc: svc, store: store, voices: voices, opts: opts, cue: map[string]*cueState{}}
 	srv := d.build()
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 }
@@ -353,7 +377,7 @@ func (d *deps) endSession(ctx context.Context, req *mcp.CallToolRequest, _ empty
 	id := req.Session.ID()
 	d.reg.Detach(id)
 	d.cueMu.Lock()
-	delete(d.lastEmpty, id)
+	delete(d.cue, id)
 	d.cueMu.Unlock()
 	return nil, okOut{OK: true}, nil
 }

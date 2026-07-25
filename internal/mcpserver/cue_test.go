@@ -1,12 +1,15 @@
 package mcpserver
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 // TestBeepSuppressionOnContinuation covers the cue rules: beep on a fresh listen
-// turn, but stay silent on a listen that merely continues after an empty
-// (timed-out) listen.
+// turn, stay silent on a listen that merely continues after an empty (timed-out)
+// listen, but re-prompt with a beep once enough idle time has passed.
 func TestBeepSuppressionOnContinuation(t *testing.T) {
-	d := &deps{lastEmpty: map[string]bool{}}
+	d := &deps{cue: map[string]*cueState{}}
 	const id = "s1"
 
 	if !d.beepForListen(id, false) {
@@ -15,21 +18,23 @@ func TestBeepSuppressionOnContinuation(t *testing.T) {
 	d.noteListenEnd(id, "timeout") // empty listen
 
 	if d.beepForListen(id, false) {
-		t.Fatal("re-listen after an empty listen is a continuation — should be silent")
+		t.Fatal("immediate re-listen after an empty listen is a continuation — should be silent")
 	}
-	d.noteListenEnd(id, "ok") // the user finally spoke
 
+	// After a long idle, a continuation should re-prompt with a beep.
+	d.noteListenEnd(id, "timeout")
+	d.cue[id].lastBeep = time.Now().Add(-2 * rePromptAfter)
+	if !d.beepForListen(id, false) {
+		t.Fatal("re-listen after a long idle should re-prompt with a beep")
+	}
+
+	d.noteListenEnd(id, "ok") // the user finally spoke
 	if !d.beepForListen(id, false) {
 		t.Fatal("listen after a delivered utterance is a fresh turn — should beep")
 	}
-	d.noteListenEnd(id, "timeout")
 
+	d.noteListenEnd(id, "timeout")
 	if !d.beepForListen(id, true) {
 		t.Fatal("a spoken converse is always a fresh turn — should beep even after a timeout")
-	}
-	// A spoken converse also resets the empty flag, so a following listen beeps.
-	d.noteListenEnd(id, "ok")
-	if !d.beepForListen(id, false) {
-		t.Fatal("listen after a spoken converse's delivery should beep")
 	}
 }
