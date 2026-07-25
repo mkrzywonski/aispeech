@@ -823,8 +823,8 @@ function uttFrac() { // fraction of the window remaining (1 = fresh, 0 = cut off
   const el = utt.elapsed + (performance.now() - utt.syncAt) / 1000;
   return Math.max(0, Math.min(1, (utt.total - el) / utt.total));
 }
-function uttBar(s) { // markup for the focused session's mic cell only
-  if (!s.focused || !utt.active || utt.total <= 0) return '';
+function uttBar(s) { // markup for the focused session's mic cell, only while it listens
+  if (!s.focused || !s.listening || !utt.active || utt.total <= 0) return '';
   const pct = (uttFrac() * 100).toFixed(1);
   return `<span class="uttcd" title="Time left before your turn is cut off"><span class="uttcd-fill" id="uttfill" style="width:${pct}%"></span></span>`;
 }
