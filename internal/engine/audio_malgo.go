@@ -507,9 +507,9 @@ func (r *MalgoRecorder) process(ctx context.Context, raw <-chan []float32, out c
 		case <-r.stop:
 			return
 		case s := <-raw:
-			for _, res := range v.push(s) {
+			for _, utt := range v.push(s) {
 				select {
-				case out <- Segment{PCM: res.pcm, SampleRate: captureRate, Capped: res.capped}:
+				case out <- Segment{PCM: utt, SampleRate: captureRate}:
 				case <-ctx.Done():
 					return
 				case <-r.stop:
@@ -554,14 +554,8 @@ func newVAD(pauseBlocks *atomic.Int64) *vad {
 }
 
 // push feeds samples and returns any completed utterances.
-// vadResult is one finished utterance plus whether the length cap ended it.
-type vadResult struct {
-	pcm    []float32
-	capped bool
-}
-
-func (v *vad) push(samples []float32) []vadResult {
-	var done []vadResult
+func (v *vad) push(samples []float32) [][]float32 {
+	var done [][]float32
 	v.block = append(v.block, samples...)
 	for len(v.block) >= vadBlock {
 		blk := v.block[:vadBlock]
@@ -580,13 +574,13 @@ func (v *vad) push(samples []float32) []vadResult {
 			v.silence++
 			if v.silence >= int(v.pauseBlocks.Load()) {
 				if u := v.finish(); u != nil {
-					done = append(done, vadResult{pcm: u})
+					done = append(done, u)
 				}
 			}
 		}
-		if len(v.utt) >= vadMaxSamp {
+		if len(v.utt) >= vadMaxSamp { // hard length cap
 			if u := v.finish(); u != nil {
-				done = append(done, vadResult{pcm: u, capped: true})
+				done = append(done, u)
 			}
 		}
 		v.pushPreroll(blk)

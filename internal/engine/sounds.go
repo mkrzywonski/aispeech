@@ -35,15 +35,15 @@ var soundCatalog = map[string][]note{
 // path (so they honor mute) but are intentionally kept out of the notification
 // sound list — they are signals, not user-customizable notifications.
 const (
-	CueListen = "listen" // short "go" beep when a session starts listening
-	CueCutoff = "cutoff" // descending boop when an utterance hits the length cap
+	CueListen = "listen" // beep — "your turn, start talking" (a listen begins)
+	CueDone   = "done"   // boop — "captured, stop" (an utterance endpoints)
 )
 
 // cueCatalog holds the functional earcons, separate from soundCatalog so they
-// don't appear in the Settings sound list.
+// don't appear in the Settings sound list. Beep = start, boop = stop.
 var cueCatalog = map[string][]note{
-	"listen": {{880.00, 0.16}},                 // one clear beep — "listening, go" (A5)
-	"cutoff": {{440.00, 0.10}, {220.00, 0.22}}, // descending "you were cut off" (A4 -> A3)
+	"listen": {{880.00, 0.16}},                 // one clear ascending beep (A5)
+	"done":   {{440.00, 0.10}, {220.00, 0.22}}, // descending boop (A4 -> A3)
 }
 
 // SoundNames returns the built-in notification sound names, sorted. Cue earcons

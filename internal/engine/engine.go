@@ -33,7 +33,6 @@ type Recorder interface {
 type Segment struct {
 	PCM        []float32
 	SampleRate int
-	Capped     bool // ended by the max-length cap, not a natural pause
 }
 
 // Transcriber turns a PCM segment into text (STT).
@@ -409,11 +408,10 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 			if !ok {
 				return
 			}
-			if seg.Capped {
-				// The utterance hit the length cap mid-speech; let the user know
-				// their turn was cut so they aren't talking into the void.
-				go s.PlayCue(context.Background(), CueCutoff)
-			}
+			// Boop on every completed utterance so the user hears "captured —
+			// stop" (beep = start, boop = stop), whether it ended on a pause or
+			// the length cap.
+			go s.PlayCue(context.Background(), CueDone)
 			text, err := s.transcriber().Transcribe(ctx, seg)
 			if err != nil {
 				slog.Warn("transcribe failed", "err", err)

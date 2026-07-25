@@ -25,16 +25,12 @@ func TestVADUsesConfiguredPauseBlocks(t *testing.T) {
 	if done := v.push(silence); len(done) != 0 {
 		t.Fatalf("utterance ended after one silent block, want two")
 	}
-	done := v.push(silence)
-	if len(done) != 1 {
+	if done := v.push(silence); len(done) != 1 {
 		t.Fatalf("utterance completions after configured pause = %d, want 1", len(done))
-	}
-	if done[0].capped {
-		t.Fatal("pause-ended utterance should not be flagged capped")
 	}
 }
 
-func TestVADFlagsCappedUtterance(t *testing.T) {
+func TestVADCapsLongUtterance(t *testing.T) {
 	v := newVAD(nil) // default pause; won't trigger within the cap window here
 
 	speech := make([]float32, vadBlock)
@@ -42,20 +38,15 @@ func TestVADFlagsCappedUtterance(t *testing.T) {
 		speech[i] = 0.1
 	}
 
-	// Feed continuous speech past the length cap and confirm the forced cut is
-	// flagged capped (so the engine can play the cutoff cue).
-	var got *vadResult
+	// Continuous speech with no pause must still be force-ended by the length cap.
+	var got [][]float32
 	for pushed := 0; pushed < vadMaxSamp/vadBlock+2 && got == nil; pushed++ {
-		for _, res := range v.push(speech) {
-			r := res
-			got = &r
+		if done := v.push(speech); len(done) > 0 {
+			got = done
 		}
 	}
 	if got == nil {
 		t.Fatal("continuous speech never hit the length cap")
-	}
-	if !got.capped {
-		t.Fatal("cap-ended utterance should be flagged capped")
 	}
 }
 
@@ -82,7 +73,7 @@ func TestVADPrerollPrependsOnset(t *testing.T) {
 	if len(done) != 1 {
 		t.Fatalf("expected one completed utterance, got %d", len(done))
 	}
-	if got, min := len(done[0].pcm), prerollSamples+vadBlock; got < min {
+	if got, min := len(done[0]), prerollSamples+vadBlock; got < min {
 		t.Fatalf("utterance length %d < pre-roll + onset %d — onset was not prepended", got, min)
 	}
 }
