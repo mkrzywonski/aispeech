@@ -200,17 +200,18 @@ type pairOut struct {
 }
 
 type listenIn struct {
-	TimeoutSeconds int `json:"timeout_seconds,omitempty" jsonschema:"how long to wait for speech, in seconds"`
+	TimeoutSeconds int `json:"timeout_seconds,omitempty" jsonschema:"how long to wait for speech, in seconds; prefer a large value (e.g. 600) — a timeout is normal and costs nothing, so long waits just reduce churn (default 300, max 1800)"`
 }
 type listenOut struct {
 	Status  string `json:"status"` // ok | timeout | cancelled
 	Text    string `json:"text,omitempty"`
 	Session string `json:"session,omitempty"`
+	Note    string `json:"note,omitempty"` // plain-language guidance for non-ok statuses
 }
 
 type converseIn struct {
 	Text           string `json:"text" jsonschema:"the short reply to speak before waiting for the next command"`
-	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"how long to wait for the next command, in seconds"`
+	TimeoutSeconds int    `json:"timeout_seconds,omitempty" jsonschema:"how long to wait for the next command, in seconds; prefer a large value (e.g. 600) — a timeout is normal and costs nothing (default 300, max 1800)"`
 }
 
 type speakIn struct {
@@ -296,7 +297,11 @@ func waitResult(u session.Utterance, status string) (*mcp.CallToolResult, listen
 		return nil, listenOut{Status: "ok", Text: u.Text, Session: u.Target}, nil
 	case "unpaired":
 		return nil, listenOut{}, errUnpaired
-	default: // timeout | cancelled
+	case "timeout":
+		return nil, listenOut{Status: "timeout", Note: "No voice input yet — this is normal, not an error (like a terminal with no keystrokes). Keep the dialog alive by calling listen (or converse) again; the user may return in seconds, minutes, or hours."}, nil
+	case "cancelled":
+		return nil, listenOut{Status: "cancelled", Note: "This wait was cancelled. Stop listening unless the user asks to resume."}, nil
+	default:
 		return nil, listenOut{Status: status}, nil
 	}
 }

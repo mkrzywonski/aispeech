@@ -148,9 +148,13 @@ func main() {
 	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore,
 		controls.InstalledVoices, // user-ordered TTS voices → default per-session voice
 		mcpserver.Options{
-			Version:              fullVersion(),
-			DefaultListenTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,
-			MaxListenTimeout:     10 * time.Minute,
+			Version: fullVersion(),
+			// A listen is a long-poll: it returns immediately when the user speaks,
+			// so a long timeout only makes idle waits cheaper (fewer re-loop cycles
+			// for the agent). Kept independent of the mic idle timeout. KeepAlive
+			// holds the connection across these long waits.
+			DefaultListenTimeout: 5 * time.Minute,
+			MaxListenTimeout:     30 * time.Minute,
 		}))
 
 	// Reject requests whose Host isn't the loopback/bound authority — the
