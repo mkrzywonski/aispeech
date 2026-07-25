@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // player plays mono float32 PCM at a sample rate, blocking until playback
@@ -75,5 +76,18 @@ func (p *PiperTTS) Speak(ctx context.Context, text, voice string) error {
 	if err != nil {
 		return fmt.Errorf("read piper output: %w", err)
 	}
-	return p.play.Play(ctx, pcm, sr)
+	return p.play.Play(ctx, withLeadIn(pcm, sr), sr)
+}
+
+// ttsLeadIn is a short silence prepended to spoken audio so the playback device
+// has time to spin up before the first word — otherwise its onset is swallowed
+// and the first word sounds soft or clipped.
+const ttsLeadIn = 120 * time.Millisecond
+
+func withLeadIn(pcm []float32, sampleRate int) []float32 {
+	n := int(time.Duration(sampleRate) * ttsLeadIn / time.Second)
+	if n <= 0 {
+		return pcm
+	}
+	return append(make([]float32, n), pcm...)
 }
