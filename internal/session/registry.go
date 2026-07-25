@@ -58,13 +58,27 @@ type LogEntry struct {
 	Level   string    `json:"level,omitempty"`
 }
 
+// graceWindow is how long a just-missed utterance is held for a session that
+// re-listens a moment later, so a word spoken right at the turn boundary isn't
+// dropped. Kept short so a stale command can't fire much later.
+const graceWindow = 4 * time.Second
+
+// heldUtterance is a single buffered command awaiting its target's next listen.
+type heldUtterance struct {
+	command  string
+	heard    string
+	targetID string
+	deadline time.Time
+}
+
 // Registry is the concurrency-safe source of truth for sessions and focus.
 type Registry struct {
 	mu       sync.Mutex
 	byID     map[string]*Session
 	focusID  string
-	voiceSeq int        // rotates voice assignment when all are in use
-	log      []LogEntry // unified activity log ring buffer, newest last
+	voiceSeq int            // rotates voice assignment when all are in use
+	log      []LogEntry     // unified activity log ring buffer, newest last
+	held     *heldUtterance // grace-buffered utterance (single slot, most-recent)
 }
 
 // New returns an empty Registry.
@@ -162,6 +176,7 @@ func (r *Registry) UnpairAll() {
 		s.Paired = false
 		s.Browser = ""
 		s.listen = nil
+		r.dropHeldForLocked(s.ID)
 		r.noticeLocked("info", fmt.Sprintf("%s unpaired — a new browser took over the hub", s.Name))
 	}
 	r.focusID = ""
@@ -179,6 +194,7 @@ func (r *Registry) Detach(id string) {
 	if r.focusID == id {
 		r.focusID = ""
 	}
+	r.dropHeldForLocked(id)
 	r.noticeLocked("info", fmt.Sprintf("%s disconnected", s.Name))
 }
 
@@ -191,6 +207,13 @@ func (r *Registry) Listen(ctx context.Context, id string, timeout time.Duration)
 	if s == nil || !s.Paired {
 		r.mu.Unlock()
 		return Utterance{}, "unpaired"
+	}
+	// Grace buffer: deliver an utterance held for this session moments ago,
+	// before it expires — closes the turn-boundary race with no waiting.
+	if h := r.takeHeldForLocked(id); h != nil {
+		r.transcriptLocked(h.heard, s.Name, "delivered")
+		r.mu.Unlock()
+		return Utterance{Text: h.command, Target: s.Name}, "ok"
 	}
 	ch := make(chan Utterance, 1)
 	s.listen = ch
@@ -249,13 +272,59 @@ func (r *Registry) Deliver(text string) bool {
 		return false
 	}
 	if focus.listen == nil {
-		r.transcriptLocked(heard, focus.Name, "dropped")
+		// Grace-buffer it: an agent that re-listens within graceWindow still gets
+		// it, instead of dropping a word spoken right at the turn boundary.
+		r.holdLocked(&heldUtterance{command: command, heard: heard, targetID: focus.ID, deadline: time.Now().Add(graceWindow)})
 		return false
 	}
 	focus.listen <- Utterance{Text: command, Target: focus.Name}
 	focus.listen = nil
 	r.transcriptLocked(heard, focus.Name, "delivered")
 	return true
+}
+
+// holdLocked stashes a just-missed utterance in the single grace-buffer slot.
+// Replacing an unconsumed hold records the old one as dropped (most-recent wins).
+func (r *Registry) holdLocked(h *heldUtterance) {
+	if r.held != nil {
+		r.transcriptLocked(r.held.heard, r.nameLocked(r.held.targetID), "dropped")
+	}
+	r.held = h
+}
+
+// takeHeldForLocked returns and clears a live held utterance destined for id.
+// An expired hold is recorded as dropped and cleared; a hold for another session
+// is left in place.
+func (r *Registry) takeHeldForLocked(id string) *heldUtterance {
+	if r.held == nil {
+		return nil
+	}
+	if time.Now().After(r.held.deadline) {
+		r.transcriptLocked(r.held.heard, r.nameLocked(r.held.targetID), "dropped")
+		r.held = nil
+		return nil
+	}
+	if r.held.targetID != id {
+		return nil
+	}
+	h := r.held
+	r.held = nil
+	return h
+}
+
+// dropHeldForLocked discards any hold destined for id (e.g. it unpaired).
+func (r *Registry) dropHeldForLocked(id string) {
+	if r.held != nil && r.held.targetID == id {
+		r.transcriptLocked(r.held.heard, r.nameLocked(r.held.targetID), "dropped")
+		r.held = nil
+	}
+}
+
+func (r *Registry) nameLocked(id string) string {
+	if s := r.byID[id]; s != nil {
+		return s.Name
+	}
+	return ""
 }
 
 // SetFocus selects the focused session from the UI.

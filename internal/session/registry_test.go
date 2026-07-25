@@ -62,17 +62,42 @@ func TestBareNameSwitchesFocusOnly(t *testing.T) {
 	}
 }
 
-func TestDropWhenNotListening(t *testing.T) {
+func TestGraceBufferDeliversToReListen(t *testing.T) {
 	r := New()
-	pair(t, r, "id1", "claude") // focused, but never calls listen()
-	r.Deliver("do something")   // no outstanding listen -> dropped (recognized entry only)
+	pair(t, r, "id1", "claude") // focused, not yet listening
+	if r.Deliver("do something") {
+		t.Fatal("Deliver should report false while the target isn't listening yet")
+	}
+	// Held, not dropped: a listen arriving within the grace window still gets it.
+	u, status := r.Listen(context.Background(), "id1", time.Second)
+	if status != "ok" || u.Text != "do something" {
+		t.Fatalf("grace buffer should deliver the held utterance, got %q / %q", status, u.Text)
+	}
 	_, log := r.Snapshot()
 	last, ok := lastOfKind(log, "recognized")
-	if !ok {
-		t.Fatal("no recognized entry recorded")
+	if !ok || last.Outcome != "delivered" || last.Session != "claude" || last.Text != "do something" {
+		t.Fatalf("want delivered recognized entry, got %+v ok=%v", last, ok)
 	}
-	if last.Outcome != "dropped" || last.Session != "claude" || last.Text != "do something" {
-		t.Fatalf("want dropped recognized entry, got %+v", last)
+}
+
+func TestGraceBufferExpiresToDropped(t *testing.T) {
+	r := New()
+	pair(t, r, "id1", "claude")
+	if r.Deliver("stale command") {
+		t.Fatal("should not deliver to a non-listening session")
+	}
+	r.held.deadline = time.Now().Add(-time.Second) // force expiry
+
+	// The expired hold must not be delivered; the next listen times out and the
+	// utterance is recorded dropped.
+	_, status := r.Listen(context.Background(), "id1", 10*time.Millisecond)
+	if status != "timeout" {
+		t.Fatalf("an expired hold must not deliver, got status %q", status)
+	}
+	_, log := r.Snapshot()
+	last, ok := lastOfKind(log, "recognized")
+	if !ok || last.Outcome != "dropped" || last.Session != "claude" {
+		t.Fatalf("want dropped recognized entry, got %+v ok=%v", last, ok)
 	}
 }
 
