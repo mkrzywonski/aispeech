@@ -78,6 +78,35 @@ func TestVADPrerollPrependsOnset(t *testing.T) {
 	}
 }
 
+func TestVADHoldSuppressesEndpointing(t *testing.T) {
+	pause := &atomic.Int64{}
+	pause.Store(2)
+	hold := &atomic.Bool{}
+	hold.Store(true)
+	v := newVAD(pause)
+	v.holding = hold
+
+	speech := make([]float32, vadBlock)
+	for i := range speech {
+		speech[i] = 0.1
+	}
+	silence := make([]float32, vadBlock)
+
+	for i := 0; i < vadMinBlocks; i++ {
+		v.push(speech)
+	}
+	// Silence far past the pause threshold must NOT end the utterance while held.
+	for i := 0; i < 20; i++ {
+		if done := v.push(silence); len(done) != 0 {
+			t.Fatalf("holding should suppress silence endpointing, got %d completions", len(done))
+		}
+	}
+	// Release flushes the accumulated utterance.
+	if u := v.flush(); u == nil {
+		t.Fatal("flush should emit the held utterance on release")
+	}
+}
+
 func TestMalgoRecorderPauseDurationIsClamped(t *testing.T) {
 	r := NewMalgoRecorder(nil)
 	r.SetPauseDuration(100 * time.Millisecond)

@@ -184,7 +184,7 @@
   </button>
   <span id="ailisten" class="pill" title="Whether the focused agent is waiting for voice via its listen() tool"></span>
   <label class="idle"><input type="checkbox" id="idleenabled"> Disable microphone after <input type="number" id="idlemin" min="1" step="1"> minutes idle</label>
-  <span class="cap">Click the mic or press Space to toggle the microphone.</span>
+  <span class="cap">Tap the mic (or Space) to toggle listening; press and hold to push-to-talk — silence won't cut you off.</span>
   <div id="idlecd" class="idlecd" hidden>
     <div class="idlecd-bar" role="progressbar" aria-label="Time until the mic turns off"><div class="idlecd-fill" id="idlecdfill"></div></div>
     <span class="idlecd-txt" id="idlecdtxt"></span>
@@ -332,7 +332,30 @@ $('voicewarnbtn').onclick = () => setTab('settings');
 
 // --- PTT ---
 let micHot = false;
-$('mic').onclick = () => post(micHot ? '/api/ptt/stop' : '/api/ptt/start');
+// Mic gesture: a quick tap toggles hands-free listening; press-and-hold is
+// push-to-talk (talk while held, release ends the utterance — silence won't cut
+// you off). Works on the mic button (pointer) and the Space key.
+const TAP_MS = 200;
+let pressing = false, pressAt = 0, pressWasHot = false;
+function micPress() {
+  if (pressing || $('mic').disabled) return;
+  pressing = true; pressAt = performance.now(); pressWasHot = micHot;
+  post('/api/ptt/hold', { down: true });
+}
+function micRelease() {
+  if (!pressing) return;
+  pressing = false;
+  const held = performance.now() - pressAt;
+  if (held < TAP_MS) {
+    // Tap = toggle: off if it was already on, otherwise leave it on (hands-free).
+    post(pressWasHot ? '/api/ptt/stop' : '/api/ptt/hold', pressWasHot ? {} : { down: false });
+  } else {
+    post('/api/ptt/hold', { down: false }); // hold release: flush, mic stays hot
+  }
+}
+$('mic').addEventListener('pointerdown', (e) => { e.preventDefault(); micPress(); });
+window.addEventListener('pointerup', micRelease);
+window.addEventListener('pointercancel', micRelease);
 $('idlemin').onchange = (e) => {
   const m = parseFloat(e.target.value); if (!(m > 0)) return;
   fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_minutes: m }) });
@@ -341,12 +364,19 @@ $('idleenabled').onchange = (e) => {
   $('idlemin').disabled = !e.target.checked;
   fetch('/api/interaction', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog_timeout_enabled: e.target.checked }) });
 };
-document.addEventListener('keydown', (e) => {
-  if (e.code !== 'Space' || e.repeat) return;
+function spaceTargetOK(e) {
   const t = e.target.tagName;
-  if (t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || t === 'BUTTON' || t === 'SUMMARY') return;
+  return !(t === 'INPUT' || t === 'TEXTAREA' || t === 'SELECT' || t === 'BUTTON' || t === 'SUMMARY');
+}
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space' || e.repeat || !spaceTargetOK(e)) return;
   e.preventDefault();
-  if (!$('mic').disabled) $('mic').click();
+  micPress();
+});
+document.addEventListener('keyup', (e) => {
+  if (e.code !== 'Space' || !spaceTargetOK(e)) return;
+  e.preventDefault();
+  micRelease();
 });
 $('devsend').onclick = () => { const t = $('devtext').value.trim(); if (t) { post('/api/dev/inject', { text: t }); $('devtext').value = ''; } };
 $('devtext').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('devsend').click(); });

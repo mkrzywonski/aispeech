@@ -586,6 +586,7 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/session/revoke", g(s.revoke))
 	mux.HandleFunc("POST /api/ptt/start", g(s.pttStart))
 	mux.HandleFunc("POST /api/ptt/stop", g(s.pttStop))
+	mux.HandleFunc("POST /api/ptt/hold", g(s.pttHold))
 	mux.HandleFunc("POST /api/listen/constant", g(s.constant))
 	if s.devInj {
 		mux.HandleFunc("POST /api/dev/inject", g(s.devInject))
@@ -1064,6 +1065,26 @@ func (s *Server) pttStart(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pttStop(w http.ResponseWriter, r *http.Request) {
 	s.svc.Stop()
+	writeJSON(w, map[string]bool{"ok": true})
+}
+
+// pttHold drives push-to-talk hold: down=true suspends endpointing (mic hot);
+// down=false flushes the held utterance and resumes normal listening.
+func (s *Server) pttHold(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Down bool `json:"down"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if body.Down {
+		if err := s.svc.HoldStart(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	} else {
+		s.svc.HoldStop()
+	}
 	writeJSON(w, map[string]bool{"ok": true})
 }
 

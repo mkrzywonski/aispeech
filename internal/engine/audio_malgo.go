@@ -379,8 +379,28 @@ type MalgoRecorder struct {
 	mu          sync.Mutex
 	dev         *malgo.Device
 	stop        chan struct{}
+	finalize    chan struct{} // push-to-talk release: flush the current utterance
 	pauseBlocks atomic.Int64
 	uttSamples  atomic.Int64 // length of the in-progress utterance (0 = none)
+	holding     atomic.Bool  // push-to-talk: suspend silence/cap endpointing
+}
+
+// SetHolding enables or disables push-to-talk hold: while set, the VAD does not
+// end an utterance on silence or the length cap, so a long thought isn't cut.
+func (r *MalgoRecorder) SetHolding(h bool) { r.holding.Store(h) }
+
+// Finalize flushes the in-progress utterance immediately (push-to-talk release).
+func (r *MalgoRecorder) Finalize() {
+	r.mu.Lock()
+	ch := r.finalize
+	r.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- struct{}{}:
+	default: // a flush is already pending
+	}
 }
 
 // UtteranceProgress reports how far the current utterance is toward the length
@@ -473,7 +493,9 @@ func (r *MalgoRecorder) Start(ctx context.Context) (<-chan Segment, error) {
 	}
 	r.dev = dev
 	r.stop = make(chan struct{})
+	r.finalize = make(chan struct{}, 1)
 	r.uttSamples.Store(0)
+	r.holding.Store(false)
 
 	out := make(chan Segment, 4)
 	go r.process(ctx, raw, out)
@@ -500,21 +522,33 @@ func (r *MalgoRecorder) process(ctx context.Context, raw <-chan []float32, out c
 	defer r.uttSamples.Store(0)
 	v := newVAD(&r.pauseBlocks)
 	v.uttSamples = &r.uttSamples
+	v.holding = &r.holding
+	emit := func(utts [][]float32) bool {
+		for _, utt := range utts {
+			select {
+			case out <- Segment{PCM: utt, SampleRate: captureRate}:
+			case <-ctx.Done():
+				return false
+			case <-r.stop:
+				return false
+			}
+		}
+		return true
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-r.stop:
 			return
+		case <-r.finalize:
+			// Push-to-talk release: emit whatever has accumulated as one utterance.
+			if u := v.flush(); u != nil && !emit([][]float32{u}) {
+				return
+			}
 		case s := <-raw:
-			for _, utt := range v.push(s) {
-				select {
-				case out <- Segment{PCM: utt, SampleRate: captureRate}:
-				case <-ctx.Done():
-					return
-				case <-r.stop:
-					return
-				}
+			if !emit(v.push(s)) {
+				return
 			}
 		}
 	}
@@ -530,7 +564,14 @@ type vad struct {
 	preroll     []float32 // rolling lookback of recent audio, prepended on onset
 	pauseBlocks *atomic.Int64
 	uttSamples  *atomic.Int64 // optional: published in-progress utterance length
+	holding     *atomic.Bool  // optional: while set, silence/cap do not end an utterance
 }
+
+// held reports whether push-to-talk hold is suspending automatic endpointing.
+func (v *vad) held() bool { return v.holding != nil && v.holding.Load() }
+
+// flush ends the in-progress utterance on demand (push-to-talk release).
+func (v *vad) flush() []float32 { return v.finish() }
 
 const (
 	vadBlock     = 320   // 20 ms at 16 kHz
@@ -572,13 +613,13 @@ func (v *vad) push(samples []float32) [][]float32 {
 		} else if v.inSpeech {
 			v.utt = append(v.utt, blk...) // keep trailing silence for context
 			v.silence++
-			if v.silence >= int(v.pauseBlocks.Load()) {
+			if v.silence >= int(v.pauseBlocks.Load()) && !v.held() {
 				if u := v.finish(); u != nil {
 					done = append(done, u)
 				}
 			}
 		}
-		if len(v.utt) >= vadMaxSamp { // hard length cap
+		if len(v.utt) >= vadMaxSamp && !v.held() { // hard length cap (off while holding)
 			if u := v.finish(); u != nil {
 				done = append(done, u)
 			}

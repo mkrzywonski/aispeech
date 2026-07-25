@@ -332,6 +332,42 @@ func (s *Service) StartDialog() error { return s.start(ModeDialog) }
 // StartConstant enables always-on listening.
 func (s *Service) StartConstant() error { return s.start(ModeConstant) }
 
+// Holder is an optional Recorder capability for push-to-talk: suspend automatic
+// endpointing while a key/button is held, and flush the utterance on release.
+type Holder interface {
+	SetHolding(bool)
+	Finalize()
+}
+
+// HoldStart begins a push-to-talk hold: the mic goes hot (if it wasn't) and
+// automatic endpointing is suspended, so a long thought isn't cut mid-sentence.
+func (s *Service) HoldStart() error {
+	if s.Mode() == ModeIdle {
+		if err := s.StartDialog(); err != nil {
+			return err
+		}
+	}
+	s.mu.Lock()
+	rec := s.rec
+	s.mu.Unlock()
+	if h, ok := rec.(Holder); ok {
+		h.SetHolding(true)
+	}
+	return nil
+}
+
+// HoldStop ends a push-to-talk hold: the held utterance is flushed and normal
+// endpointing resumes. The mic stays hot (tap the mic to turn it off).
+func (s *Service) HoldStop() {
+	s.mu.Lock()
+	rec := s.rec
+	s.mu.Unlock()
+	if h, ok := rec.(Holder); ok {
+		h.Finalize()
+		h.SetHolding(false)
+	}
+}
+
 // Stop ends listening and closes the mic.
 func (s *Service) Stop() {
 	s.mu.Lock()
