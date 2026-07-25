@@ -194,6 +194,10 @@ Flags: `--addr host:port` (override bind address), `--version` / `-v`,
 
 The hub is localhost HTTP, with **browser-bound** authorization:
 
+- We do NOT want third parties connecting to the web UI and injecting prompts
+  into the AI session without our knowledge. The AI will not trust the voice
+  session until the web UI user proves he is the same user in the AI TUI by
+  pasting a paring code from the web UI into the TUI. 
 - The browser gets an `HttpOnly` / `SameSite=Strict` session cookie on load.
 - Pairing mints a single-use, short-lived token (hashed at rest) that you copy
   and paste to the agent. No pairing secret is ever readable over an endpoint, so
