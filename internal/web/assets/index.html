@@ -52,6 +52,9 @@
   .mic .slash { display: inline; }
   .mic.hot .slash { display: none; }
   .mic.hot svg { animation: micpulse 1.3s ease-in-out infinite; }
+  /* mic is on but no agent is waiting: on, but not "your turn" — muted, no pulse */
+  .mic.warm svg { color: #f5a623; }
+  .mic.warm .slash { display: none; }
   .mic.stale { opacity: .4; }
   @keyframes micpulse { 0%,100% { opacity: 1; } 50% { opacity: .5; } }
   .ptt .big { font-size: 1.05rem; padding: .6rem 1.2rem; }
@@ -1029,14 +1032,22 @@ window.addEventListener('keydown', braudio.warm);
 // --- main state ---
 function render(state) {
   micHot = state.mic_mode !== 'idle';
+  const focused = state.sessions.find(s => s.focused && s.paired);
+  const listeningCount = state.sessions.filter(s => s.paired && s.listening).length;
+  // "Your turn" needs BOTH a hot mic and an agent actually waiting on listen().
+  // A hot mic with nobody listening drops what you say, so don't signal "go" —
+  // show a muted "warm" state instead.
+  const yourTurn = micHot && listeningCount > 0;
   const mic = $('mic');
-  mic.classList.toggle('hot', micHot); mic.classList.remove('stale');
+  mic.classList.toggle('hot', yourTurn);
+  mic.classList.toggle('warm', micHot && !yourTurn);
+  mic.classList.remove('stale');
   mic.setAttribute('aria-pressed', String(micHot));
   mic.setAttribute('aria-label', micHot ? 'Stop listening' : 'Start listening');
-  mic.title = micHot ? 'Listening — click to stop' : 'Start listening';
-  document.body.classList.toggle('listening', micHot);
-  setFav(micHot);
-  document.title = micHot ? '🔴 aispeech — listening' : 'aispeech';
+  mic.title = yourTurn ? 'Listening — your turn to talk' : (micHot ? 'Mic on, but no agent is waiting' : 'Start listening');
+  document.body.classList.toggle('listening', yourTurn);
+  setFav(yourTurn);
+  document.title = yourTurn ? '🔴 aispeech — listening' : 'aispeech';
   if (document.activeElement !== $('idlemin')) $('idlemin').value = state.dialog_timeout_minutes;
   if (document.activeElement !== $('idleenabled')) $('idleenabled').checked = !!state.dialog_timeout_enabled;
   $('idlemin').disabled = !state.dialog_timeout_enabled;
@@ -1046,8 +1057,6 @@ function render(state) {
 
   // Agent-listening status: distinct from mic-on. The mic can be hot while the
   // focused agent is busy (not waiting on listen()), in which case speech drops.
-  const focused = state.sessions.find(s => s.focused && s.paired);
-  const listeningCount = state.sessions.filter(s => s.paired && s.listening).length;
   const al = $('ailisten');
   if (listeningCount === 0) { al.textContent = 'no agents listening'; al.className = 'pill'; }
   else { al.textContent = `${listeningCount} agent${listeningCount === 1 ? '' : 's'} listening`; al.className = 'pill on'; }
