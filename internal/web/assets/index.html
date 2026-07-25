@@ -127,9 +127,6 @@
   .idel { font-size: .8rem; padding: .15rem .5rem; color: #e5484d; border: 1px solid #e5484d55; background: none; border-radius: 6px; cursor: pointer; }
   .idel:hover { background: #e5484d; color: #fff; }
   .idel:disabled { opacity: .5; cursor: not-allowed; }
-  .imove { font-size: .7rem; line-height: 1; padding: .15rem .35rem; color: #888; border: 1px solid #8884; background: none; border-radius: 4px; cursor: pointer; }
-  .imove:hover:not(:disabled) { color: #2d7cf0; border-color: #2d7cf0; }
-  .imove:disabled { opacity: .3; cursor: default; }
   .voicerow .drag { color: #999; cursor: grab; user-select: none; font-size: .95rem; line-height: 1; }
   .voicerow.dragging { opacity: .45; }
   .irow.drop-above { box-shadow: inset 0 3px 0 -1px #2d7cf0; }
@@ -581,22 +578,20 @@ function renderInstalled(m) {
     if (c.kind !== 'whisper' || !c.installed) continue;
     rows.push(irow(c, c.primary === activeWhisper, ''));
   }
-  // Text-to-speech voices, in the user-defined order. Reorder by dragging, or
-  // with the up/down buttons; also sample or delete each.
+  // Text-to-speech voices, in the user-defined order. Reorder by dragging a
+  // row; also sample or delete each.
   installedVoices = m.installed_piper || [];
   installedVoices.forEach((path, i) => {
     const c = catByPrimary[base(path)];
     if (!c) return;
     const active = base(path) === activePiper;
     const handle = `<span class="drag" title="Drag to reorder" aria-hidden="true">&#10303;</span>`;
-    const up = `<button class="imove" data-dir="up" data-i="${i}" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>&#9650;</button>`;
-    const down = `<button class="imove" data-dir="down" data-i="${i}" title="Move down" aria-label="Move down" ${i === installedVoices.length - 1 ? 'disabled' : ''}>&#9660;</button>`;
     const sample = `<button class="play" data-voice="${esc(path)}" title="Sample ${esc(c.name)}" aria-label="Sample ${esc(c.name)}">${SPEAKER_ICON}</button>`;
     rows.push(
       `<div class="irow voicerow" draggable="true" data-vi="${i}" data-vb="${esc(base(path))}">` +
         handle +
         `<span class="iname">${esc(c.name)}${active ? ' <span class="pill on">active</span>' : ''}</span>` +
-        up + down + sample +
+        sample +
         `<button class="idel" data-id="${esc(c.id)}" title="Delete ${esc(c.name)}" aria-label="Delete ${esc(c.name)}">Delete</button>` +
       `</div>`);
   });
@@ -608,15 +603,6 @@ async function applyOrder(order) {
   if (r.ok) renderModels(await r.json());
 }
 $('installed').onclick = async (e) => {
-  const mv = e.target.closest('button.imove');
-  if (mv) {
-    const i = +mv.dataset.i, j = mv.dataset.dir === 'up' ? i - 1 : i + 1;
-    const order = installedVoices.map(base);
-    if (j < 0 || j >= order.length) return;
-    [order[i], order[j]] = [order[j], order[i]];
-    applyOrder(order);
-    return;
-  }
   const play = e.target.closest('button.play');
   if (play) {
     const voice = play.dataset.voice; if (!voice) return;
