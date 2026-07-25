@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -172,9 +173,61 @@ func (c *Controls) installState() map[string]any {
 	return map[string]any{"url": c.mcpURL, "agents": mcpinstall.Statuses(c.mcpURL)}
 }
 
-// InstalledVoices lists installed piper voice paths (for per-session selection).
+// InstalledVoices lists installed piper voice paths in the user-defined order
+// (config VoiceOrder, matched by basename), with any voices not listed appended
+// alphabetically. This order drives the Settings list, the hub voice dropdown,
+// and the default voice assigned to each connecting agent session.
 func (c *Controls) InstalledVoices() []string {
-	return c.store.Installed(modelstore.Piper)
+	c.mu.Lock()
+	order := append([]string(nil), c.cfg.VoiceOrder...)
+	c.mu.Unlock()
+	return orderVoices(c.store.Installed(modelstore.Piper), order)
+}
+
+// orderVoices returns paths sorted by the basenames in order; installed voices
+// not named in order keep their (alphabetical) position at the end.
+func orderVoices(paths, order []string) []string {
+	byBase := make(map[string]string, len(paths))
+	for _, p := range paths {
+		byBase[filepath.Base(p)] = p
+	}
+	out := make([]string, 0, len(paths))
+	seen := make(map[string]bool, len(paths))
+	for _, name := range order {
+		if p, ok := byBase[name]; ok && !seen[p] {
+			out = append(out, p)
+			seen[p] = true
+		}
+	}
+	for _, p := range paths {
+		if !seen[p] {
+			out = append(out, p)
+			seen[p] = true
+		}
+	}
+	return out
+}
+
+// setVoiceOrder persists a new ordering of installed voices (given by basename).
+// Unknown or duplicate names are dropped so config stays clean.
+func (c *Controls) setVoiceOrder(order []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	installed := make(map[string]bool)
+	for _, p := range c.store.Installed(modelstore.Piper) {
+		installed[filepath.Base(p)] = true
+	}
+	clean := make([]string, 0, len(order))
+	seen := make(map[string]bool)
+	for _, name := range order {
+		name = filepath.Base(name) // never store a path
+		if installed[name] && !seen[name] {
+			clean = append(clean, name)
+			seen[name] = true
+		}
+	}
+	c.cfg.VoiceOrder = clean
+	return c.save()
 }
 
 // sampleGreeting is spoken when previewing a voice in the UI.
@@ -219,6 +272,7 @@ type catalogView struct {
 	Name      string `json:"name"`
 	Size      string `json:"size"`
 	Kind      string `json:"kind"`
+	Primary   string `json:"primary"`
 	Installed bool   `json:"installed"`
 }
 
@@ -238,12 +292,13 @@ func (c *Controls) modelsState() modelsResp {
 		ModelStatus:      c.models.Status(c.modelOptions()),
 		ModelsDir:        c.store.Dir(),
 		InstalledWhisper: c.store.Installed(modelstore.Whisper),
-		InstalledPiper:   c.store.Installed(modelstore.Piper),
+		InstalledPiper:   orderVoices(c.store.Installed(modelstore.Piper), c.cfg.VoiceOrder),
 		Download:         c.dl.Status(),
 	}
 	for _, e := range modelstore.Catalog() {
 		resp.Catalog = append(resp.Catalog, catalogView{
 			ID: e.ID, Name: e.Name, Size: e.Size, Kind: string(e.Kind),
+			Primary:   e.PrimaryName(),
 			Installed: c.store.IsInstalled(e),
 		})
 	}
@@ -271,6 +326,47 @@ func (c *Controls) startDownload(id string) error {
 }
 
 func (c *Controls) downloadStatus() modelstore.DownloadState { return c.dl.Status() }
+
+// deleteModel removes an installed catalog entry's files. If the deleted entry
+// was the active model/voice, the active selection falls back to another
+// installed one (or empty), and the engine is hot-reloaded. When a TTS voice is
+// deleted its path is returned (removedVoice) so the caller can reassign any
+// session that was using it.
+func (c *Controls) deleteModel(id string) (removedVoice string, err error) {
+	e, ok := modelstore.FindEntry(id)
+	if !ok {
+		return "", errorString("unknown model id")
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dl.Status().Active {
+		return "", errorString("a download is in progress")
+	}
+	primary := c.store.PrimaryPath(e)
+	if err := c.store.Remove(e); err != nil {
+		return "", err
+	}
+	if e.Kind == modelstore.Whisper {
+		if c.cfg.WhisperModel == primary {
+			c.cfg.WhisperModel = firstOrEmpty(c.store.Installed(modelstore.Whisper))
+		}
+	} else {
+		removedVoice = primary
+		if c.cfg.PiperVoice == primary {
+			c.cfg.PiperVoice = firstOrEmpty(orderVoices(c.store.Installed(modelstore.Piper), c.cfg.VoiceOrder))
+		}
+	}
+	_ = c.save()
+	c.models.Apply(c.modelOptions())
+	return removedVoice, nil
+}
+
+func firstOrEmpty(s []string) string {
+	if len(s) > 0 {
+		return s[0]
+	}
+	return ""
+}
 
 type modelsUpdate struct {
 	WhisperModel *string `json:"whisper_model"`
@@ -478,6 +574,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/models", g(s.modelsSet))
 	mux.HandleFunc("POST /api/models/download", g(s.modelsDownload))
 	mux.HandleFunc("GET /api/models/download", o(s.modelsDownloadStatus))
+	mux.HandleFunc("POST /api/models/delete", g(s.modelsDelete))
+	mux.HandleFunc("POST /api/models/order", g(s.modelsOrder))
 	mux.HandleFunc("GET /api/interaction", o(s.interactionGet))
 	mux.HandleFunc("POST /api/interaction", g(s.interactionSet))
 	mux.HandleFunc("GET /api/install", o(s.installGet))
@@ -809,6 +907,40 @@ func (s *Server) modelsDownload(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) modelsDownloadStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, s.controls.downloadStatus())
+}
+
+func (s *Server) modelsDelete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	removedVoice, err := s.controls.deleteModel(body.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if removedVoice != "" {
+		// Reassign any session that was speaking with the deleted voice so it
+		// doesn't fail every utterance on a now-missing --model file.
+		s.reg.DropVoice(removedVoice, s.controls.InstalledVoices())
+	}
+	writeJSON(w, s.controls.modelsState())
+}
+
+func (s *Server) modelsOrder(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Order []string `json:"order"`
+	}
+	if !readJSON(w, r, &body) {
+		return
+	}
+	if err := s.controls.setVoiceOrder(body.Order); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, s.controls.modelsState())
 }
 
 func (s *Server) interactionGet(w http.ResponseWriter, r *http.Request) {

@@ -297,8 +297,18 @@ func (r *Registry) AssignVoice(id string, available []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := r.byID[id]
-	if s == nil || s.Voice != "" || len(available) == 0 {
+	if s == nil || s.Voice != "" {
 		return
+	}
+	s.Voice = r.distinctVoiceLocked(id, available)
+}
+
+// distinctVoiceLocked returns a voice from available not used by any session
+// other than id, falling back to a rotating pick when all are in use. Returns
+// "" (the default) when nothing is installed. Caller holds r.mu.
+func (r *Registry) distinctVoiceLocked(id string, available []string) string {
+	if len(available) == 0 {
+		return ""
 	}
 	used := make(map[string]bool)
 	for _, o := range r.byID {
@@ -308,12 +318,30 @@ func (r *Registry) AssignVoice(id string, available []string) {
 	}
 	for _, v := range available {
 		if !used[v] {
-			s.Voice = v
-			return
+			return v
 		}
 	}
-	s.Voice = available[r.voiceSeq%len(available)] // all in use: rotate
+	v := available[r.voiceSeq%len(available)] // all in use: rotate
 	r.voiceSeq++
+	return v
+}
+
+// DropVoice clears the given voice from every session using it (e.g. after that
+// voice was deleted) and reassigns each a distinct remaining voice, falling back
+// to the default ("") when none remain. available must be the still-installed
+// voices (not including the deleted one). No-op for the empty voice.
+func (r *Registry) DropVoice(voice string, available []string) {
+	if voice == "" {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, s := range r.byID {
+		if s.Voice == voice {
+			s.Voice = ""
+			s.Voice = r.distinctVoiceLocked(s.ID, available)
+		}
+	}
 }
 
 // Rename changes a session's display name / session-word.

@@ -28,6 +28,10 @@ type Config struct {
 	// TTS.
 	PiperBin   string `json:"piper_bin"`   // path to piper binary
 	PiperVoice string `json:"piper_voice"` // path to a piper .onnx voice
+	// VoiceOrder is the user-defined ordering of installed TTS voices, by
+	// basename. It drives the Settings list order and the default voice each
+	// connecting agent session is assigned. Voices not listed are appended.
+	VoiceOrder []string `json:"voice_order"`
 
 	// ModelsDir is where downloaded models are stored ("" = default data dir).
 	ModelsDir string `json:"models_dir"`

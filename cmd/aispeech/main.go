@@ -146,7 +146,7 @@ func main() {
 	mux := http.NewServeMux()
 	web.New(reg, svc, controls, authStore, allow, bridge, *devInject).Routes(mux)
 	mux.Handle("/mcp", mcpserver.NewHandler(reg, svc, authStore,
-		func() []string { return store.Installed(modelstore.Piper) },
+		controls.InstalledVoices, // user-ordered TTS voices → default per-session voice
 		mcpserver.Options{
 			Version:              fullVersion(),
 			DefaultListenTimeout: time.Duration(cfg.DialogTimeoutSeconds) * time.Second,

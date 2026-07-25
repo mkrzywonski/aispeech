@@ -69,6 +69,45 @@ func TestDownloadInstallsAndReportsProgress(t *testing.T) {
 	}
 }
 
+func TestRemoveDeletesFiles(t *testing.T) {
+	dir := t.TempDir()
+	store := New(dir)
+	entry := CatalogEntry{
+		ID: "voice", Name: "Voice", Kind: Piper,
+		Files: []FileSpec{
+			{Name: "v.onnx"},
+			{Name: "v.onnx.json"},
+		},
+	}
+	for _, f := range entry.Files {
+		if err := os.WriteFile(filepath.Join(dir, f.Name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A stray .part should also be cleaned up.
+	if err := os.WriteFile(filepath.Join(dir, "v.onnx.part"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !store.IsInstalled(entry) {
+		t.Fatal("entry should be installed")
+	}
+	if err := store.Remove(entry); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if store.IsInstalled(entry) {
+		t.Fatal("entry should be gone")
+	}
+	for _, name := range []string{"v.onnx", "v.onnx.json", "v.onnx.part"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s should be removed", name)
+		}
+	}
+	// Removing an already-absent entry is a no-op, not an error.
+	if err := store.Remove(entry); err != nil {
+		t.Fatalf("second remove: %v", err)
+	}
+}
+
 func itoa(n int) string {
 	if n == 0 {
 		return "0"

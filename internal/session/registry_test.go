@@ -126,6 +126,59 @@ func TestUnpairAll(t *testing.T) {
 	}
 }
 
+func TestAssignAndDropVoice(t *testing.T) {
+	r := New()
+	pair(t, r, "id1", "claude")
+	pair(t, r, "id2", "codex")
+
+	voices := []string{"/m/amy.onnx", "/m/lessac.onnx", "/m/alba.onnx"}
+	r.AssignVoice("id1", voices)
+	r.AssignVoice("id2", voices)
+
+	v1, v2 := r.Voice("id1"), r.Voice("id2")
+	if v1 == "" || v2 == "" || v1 == v2 {
+		t.Fatalf("expected two distinct voices, got %q and %q", v1, v2)
+	}
+
+	// Delete v1: the session using it must be moved off, onto a still-installed,
+	// non-conflicting voice — never left pointing at the deleted file.
+	remaining := []string{}
+	for _, v := range voices {
+		if v != v1 {
+			remaining = append(remaining, v)
+		}
+	}
+	r.DropVoice(v1, remaining)
+
+	nv1 := r.Voice("id1")
+	if nv1 == v1 {
+		t.Fatalf("session still using deleted voice %q", v1)
+	}
+	if nv1 == v2 {
+		t.Fatalf("reassigned to a voice already in use: %q", nv1)
+	}
+	if nv1 != "" {
+		found := false
+		for _, v := range remaining {
+			if v == nv1 {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("reassigned voice %q is not among remaining %v", nv1, remaining)
+		}
+	}
+	if r.Voice("id2") != v2 {
+		t.Fatalf("unaffected session voice changed: %q -> %q", v2, r.Voice("id2"))
+	}
+
+	// Dropping the last voice falls back to the default ("").
+	r.DropVoice(nv1, nil)
+	if got := r.Voice("id1"); got != "" {
+		t.Fatalf("expected default voice after dropping all, got %q", got)
+	}
+}
+
 func TestDefaultNameIsSingleWord(t *testing.T) {
 	r := New()
 	s := r.Attach("id1", "claude-code")

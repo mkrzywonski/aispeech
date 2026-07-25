@@ -121,6 +121,15 @@
   .sound-row .badge { font-size: .68rem; padding: .05rem .4rem; border-radius: 999px; border: 1px solid #8888; opacity: .8; }
   .sound-row .badge.custom { background: #8b5cf6; color: #fff; border-color: #8b5cf6; opacity: 1; }
   .soundadd { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-top: .6rem; max-width: 520px; }
+  .installed { display: flex; flex-direction: column; gap: .3rem; max-width: 520px; }
+  .irow { display: flex; align-items: center; gap: .5rem; padding: .3rem .5rem; border: 1px solid #8883; border-radius: 8px; }
+  .irow .iname { flex: 1; }
+  .idel { font-size: .8rem; padding: .15rem .5rem; color: #e5484d; border: 1px solid #e5484d55; background: none; border-radius: 6px; cursor: pointer; }
+  .idel:hover { background: #e5484d; color: #fff; }
+  .idel:disabled { opacity: .5; cursor: not-allowed; }
+  .imove { font-size: .7rem; line-height: 1; padding: .15rem .35rem; color: #888; border: 1px solid #8884; background: none; border-radius: 4px; cursor: pointer; }
+  .imove:hover:not(:disabled) { color: #2d7cf0; border-color: #2d7cf0; }
+  .imove:disabled { opacity: .3; cursor: default; }
   .meter { flex: 1; min-width: 120px; max-width: 220px; height: 14px; border: 1px solid #8888; border-radius: 7px; overflow: hidden; background: #8881; }
   .meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#30a46c,#f5a623 70%,#e5484d); transition: width .06s linear; }
   .meter.indet .meter-fill { width: 40% !important; background: repeating-linear-gradient(45deg,#2d7cf0,#2d7cf0 8px,#2d7cf055 8px,#2d7cf055 16px); animation: slide 1s linear infinite; }
@@ -243,10 +252,10 @@
 
   <h2>Models</h2>
   <div class="grid">
+    <label>Status</label>
+    <div><span class="pill" id="sttpill"></span> <span class="pill" id="ttspill"></span></div>
     <label for="wselect">Speech&#8209;to&#8209;text</label>
-    <div><select id="wselect"></select> <span class="pill" id="sttpill"></span></div>
-    <label for="pselect">Text&#8209;to&#8209;speech</label>
-    <div><select id="pselect"></select> <button id="samplevoice" class="play" title="Sample this voice" aria-label="Sample this voice"><svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10v4h3l4 4V6L6 10H3z" fill="currentColor" stroke="none"></path><path d="M15 9.5a4 4 0 0 1 0 5"></path><path d="M18 7a8 8 0 0 1 0 10"></path></svg></button> <span class="pill" id="ttspill"></span></div>
+    <div><select id="wselect"></select></div>
     <label for="dlselect">Download</label>
     <div class="testrow">
       <select id="dlselect"></select>
@@ -254,6 +263,8 @@
       <div class="meter" id="dlmeter" hidden role="progressbar" aria-label="Download progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div class="meter-fill" id="dlfill"></div></div>
       <span class="lvl" id="dlstatus"></span>
     </div>
+    <label>Installed</label>
+    <div id="installed" class="installed"></div>
   </div>
   <p id="modelnudge" class="cap" hidden>No speech model installed — pick one above and click Download.</p>
   <p id="modelerr" class="muted" style="color:#e5484d"></p>
@@ -477,12 +488,6 @@ async function refreshAudio() {
 // --- models ---
 async function postModels(body) { renderModels(await (await fetch('/api/models', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()); }
 $('wselect').onchange = (e) => postModels({ whisper_model: e.target.value });
-$('pselect').onchange = (e) => postModels({ piper_voice: e.target.value });
-$('samplevoice').onclick = () => {
-  const voice = $('pselect').value;
-  if (!voice) return;
-  fetch('/api/voice/sample', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice }) });
-};
 $('savemodels').onclick = () => postModels({
   whisper_model: $('wmodel').value.trim(), piper_voice: $('pvoice').value.trim(),
   language: $('lang').value.trim(), whisper_bin: $('wbin').value.trim(), piper_bin: $('pbin').value.trim()
@@ -530,8 +535,6 @@ function optList(paths, current) {
 }
 function renderModels(m) {
   if (document.activeElement !== $('wselect')) $('wselect').innerHTML = optList(m.installed_whisper || [], m.whisper_model || '');
-  if (document.activeElement !== $('pselect')) $('pselect').innerHTML = optList(m.installed_piper || [], m.piper_voice || '');
-  $('samplevoice').disabled = !((m.installed_piper || []).length);
   if (document.activeElement !== $('dlselect')) {
     const stt = [], tts = [];
     for (const c of (m.catalog || [])) {
@@ -540,6 +543,7 @@ function renderModels(m) {
     }
     $('dlselect').innerHTML = `<optgroup label="Speech-to-text">${stt.join('')}</optgroup><optgroup label="Text-to-speech">${tts.join('')}</optgroup>`;
   }
+  renderInstalled(m);
   setPill($('sttpill'), m.stt_ready, 'STT ready', 'STT off');
   setPill($('ttspill'), m.tts_ready, 'TTS ready', 'TTS off');
   $('modelnudge').hidden = m.stt_ready || (m.installed_whisper || []).length > 0;
@@ -555,6 +559,61 @@ function renderModels(m) {
   $('modelerr').textContent = errs.join(' · ');
   if (m.download && m.download.active) startDlPoll();
 }
+let installedVoices = []; // ordered piper voice paths, for reordering
+function irow(c, active, controls) {
+  return `<div class="irow"><span class="iname">${esc(c.name)}${active ? ' <span class="pill on">active</span>' : ''}</span>` +
+    controls +
+    `<button class="idel" data-id="${esc(c.id)}" title="Delete ${esc(c.name)}" aria-label="Delete ${esc(c.name)}">Delete</button></div>`;
+}
+function renderInstalled(m) {
+  const el = $('installed');
+  const activeWhisper = base(m.whisper_model || '');
+  const activePiper = base(m.piper_voice || '');
+  const catByPrimary = {};
+  for (const c of (m.catalog || [])) catByPrimary[c.primary] = c;
+  const rows = [];
+  // Speech-to-text models, in catalog order — delete only.
+  for (const c of (m.catalog || [])) {
+    if (c.kind !== 'whisper' || !c.installed) continue;
+    rows.push(irow(c, c.primary === activeWhisper, ''));
+  }
+  // Text-to-speech voices, in the user-defined order — reorder, sample, delete.
+  installedVoices = m.installed_piper || [];
+  installedVoices.forEach((path, i) => {
+    const c = catByPrimary[base(path)];
+    if (!c) return;
+    const up = `<button class="imove" data-dir="up" data-i="${i}" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>&#9650;</button>`;
+    const down = `<button class="imove" data-dir="down" data-i="${i}" title="Move down" aria-label="Move down" ${i === installedVoices.length - 1 ? 'disabled' : ''}>&#9660;</button>`;
+    const sample = `<button class="play" data-voice="${esc(path)}" title="Sample ${esc(c.name)}" aria-label="Sample ${esc(c.name)}">${SPEAKER_ICON}</button>`;
+    rows.push(irow(c, base(path) === activePiper, up + down + sample));
+  });
+  el.innerHTML = rows.length ? rows.join('') : '<span class="muted">Nothing installed yet.</span>';
+}
+$('installed').onclick = async (e) => {
+  const mv = e.target.closest('button.imove');
+  if (mv) {
+    const i = +mv.dataset.i, j = mv.dataset.dir === 'up' ? i - 1 : i + 1;
+    const order = installedVoices.map(base);
+    if (j < 0 || j >= order.length) return;
+    [order[i], order[j]] = [order[j], order[i]];
+    const r = await fetch('/api/models/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
+    if (r.ok) renderModels(await r.json());
+    return;
+  }
+  const play = e.target.closest('button.play');
+  if (play) {
+    const voice = play.dataset.voice; if (!voice) return;
+    fetch('/api/voice/sample', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice }) });
+    return;
+  }
+  const btn = e.target.closest('button.idel'); if (!btn) return;
+  const id = btn.dataset.id;
+  if (!confirm('Delete this model? The files will be removed from disk.')) return;
+  btn.disabled = true;
+  const r = await fetch('/api/models/delete', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+  if (!r.ok) { btn.disabled = false; alert(await r.text()); return; }
+  renderModels(await r.json());
+};
 async function refreshModels() { if ($('settings').hidden) return; try { renderModels(await (await fetch('/api/models')).json()); } catch (e) {} }
 
 // --- connect AI agents ---

@@ -173,6 +173,21 @@ func (s *Store) PrimaryPath(e CatalogEntry) string {
 	return filepath.Join(s.dir, e.PrimaryName())
 }
 
+// Remove deletes all of an entry's installed files (plus any leftover .part
+// downloads). Files that are already absent are ignored.
+func (s *Store) Remove(e CatalogEntry) error {
+	for _, f := range e.Files {
+		p := filepath.Join(s.dir, f.Name)
+		if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Remove(p + ".part"); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
 // DownloadState is a snapshot of the downloader.
 type DownloadState struct {
 	Active   bool   `json:"active"`
