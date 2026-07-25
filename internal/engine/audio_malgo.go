@@ -19,8 +19,11 @@ const captureRate = 16000 // whisper.cpp expects 16 kHz mono
 
 // captureGuardTail keeps the microphone gated for a short window after playback
 // ends, so the tail of a spoken reply (and any speaker/room ring-out) isn't
-// captured and transcribed back as if it were user speech.
-const captureGuardTail = 300 * time.Millisecond
+// captured and transcribed back as if it were user speech. It is deliberately
+// short: the last thing played before we listen is the brief, quiet start-cue
+// beep, so a long guard here just clips the user's first word. The VAD's
+// pre-roll lookback recovers any soft onset that lands just past the gate.
+const captureGuardTail = 100 * time.Millisecond
 
 // AudioContext owns the miniaudio backend context, shared by capture and
 // playback. Device selection and levels are adjustable at runtime.
@@ -523,7 +526,8 @@ type vad struct {
 	block       []float32 // accumulates until blockSize
 	inSpeech    bool
 	utt         []float32
-	silence     int // consecutive silent blocks while in speech
+	silence     int       // consecutive silent blocks while in speech
+	preroll     []float32 // rolling lookback of recent audio, prepended on onset
 	pauseBlocks *atomic.Int64
 	uttSamples  *atomic.Int64 // optional: published in-progress utterance length
 }
@@ -535,6 +539,9 @@ const (
 	// pauseBlocks (see MalgoRecorder.SetPauseDuration / DefaultSTTPause).
 	vadMinBlocks = 8 // ignore utterances shorter than ~160 ms
 	vadMaxSamp   = captureRate * 20
+	// prerollSamples is how much audio just before speech is detected gets
+	// prepended to an utterance, so a soft or fast onset isn't clipped (~300 ms).
+	prerollSamples = captureRate * 3 / 10
 )
 
 func newVAD(pauseBlocks *atomic.Int64) *vad {
@@ -562,6 +569,9 @@ func (v *vad) push(samples []float32) []vadResult {
 		speech := rms(blk) > vadThreshold
 
 		if speech {
+			if !v.inSpeech {
+				v.utt = append(v.utt, v.preroll...) // lookback so the onset isn't clipped
+			}
 			v.inSpeech = true
 			v.silence = 0
 			v.utt = append(v.utt, blk...)
@@ -579,11 +589,21 @@ func (v *vad) push(samples []float32) []vadResult {
 				done = append(done, vadResult{pcm: u, capped: true})
 			}
 		}
+		v.pushPreroll(blk)
 	}
 	if v.uttSamples != nil {
 		v.uttSamples.Store(int64(len(v.utt)))
 	}
 	return done
+}
+
+// pushPreroll keeps preroll to the most recent prerollSamples of audio, used as
+// lookback context prepended to the next utterance's onset.
+func (v *vad) pushPreroll(blk []float32) {
+	v.preroll = append(v.preroll, blk...)
+	if len(v.preroll) > prerollSamples {
+		v.preroll = append(v.preroll[:0:0], v.preroll[len(v.preroll)-prerollSamples:]...)
+	}
 }
 
 func (v *vad) finish() []float32 {
