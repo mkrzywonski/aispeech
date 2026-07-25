@@ -40,18 +40,19 @@ type deps struct {
 
 type cueState struct {
 	lastEmpty bool      // did the previous listen end empty (timeout)?
-	lastBeep  time.Time // when the start beep last played for this session
+	lastEnd   time.Time // when the previous listen ended
 }
 
-// rePromptAfter re-prompts the user with a beep even during a continuation once
-// this much time has passed since the last beep, so a long idle wait isn't
-// left in total silence.
+// rePromptAfter beeps again on a continuation only once the gap since the last
+// listen ended reaches this — so an agent tight-looping empty listens stays
+// silent, while one whose listening lapsed for a while re-prompts on resuming.
 const rePromptAfter = 15 * time.Second
 
 // beepForListen reports whether to play the start-of-listen beep. A listen that
-// merely continues after an empty (timed-out) listen stays silent — unless it's
-// been rePromptAfter since the last beep, in which case we re-prompt. fresh
-// forces a beep (the caller just spoke, e.g. converse).
+// merely continues right after an empty (timed-out) listen stays silent, so an
+// ignored agent looping in the background doesn't beep every cycle. It re-prompts
+// only if the not-listening gap since the last listen reached rePromptAfter.
+// fresh forces a beep (the caller just spoke, e.g. converse).
 func (d *deps) beepForListen(id string, fresh bool) bool {
 	d.cueMu.Lock()
 	defer d.cueMu.Unlock()
@@ -63,15 +64,12 @@ func (d *deps) beepForListen(id string, fresh bool) bool {
 	if fresh {
 		st.lastEmpty = false
 	}
-	beep := fresh || !st.lastEmpty || time.Since(st.lastBeep) >= rePromptAfter
-	if beep {
-		st.lastBeep = time.Now()
-	}
-	return beep
+	return fresh || !st.lastEmpty || time.Since(st.lastEnd) >= rePromptAfter
 }
 
-// noteListenEnd records whether a listen ended empty (timed out), so the next
-// listen for this session can tell a continuation from a fresh turn.
+// noteListenEnd records how a listen ended (empty or not) and when, so the next
+// listen for this session can tell a fresh turn or a lapsed gap from a tight
+// continuation loop.
 func (d *deps) noteListenEnd(id, status string) {
 	d.cueMu.Lock()
 	defer d.cueMu.Unlock()
@@ -81,6 +79,7 @@ func (d *deps) noteListenEnd(id, status string) {
 		d.cue[id] = st
 	}
 	st.lastEmpty = status == "timeout"
+	st.lastEnd = time.Now()
 }
 
 // NewHandler builds the MCP HTTP handler. A single logical server is shared

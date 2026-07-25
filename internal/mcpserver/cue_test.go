@@ -21,11 +21,12 @@ func TestBeepSuppressionOnContinuation(t *testing.T) {
 		t.Fatal("immediate re-listen after an empty listen is a continuation — should be silent")
 	}
 
-	// After a long idle, a continuation should re-prompt with a beep.
+	// A continuation after a genuine lapse (long gap since the last listen ended)
+	// re-prompts with a beep.
 	d.noteListenEnd(id, "timeout")
-	d.cue[id].lastBeep = time.Now().Add(-2 * rePromptAfter)
+	d.cue[id].lastEnd = time.Now().Add(-2 * rePromptAfter)
 	if !d.beepForListen(id, false) {
-		t.Fatal("re-listen after a long idle should re-prompt with a beep")
+		t.Fatal("re-listen after a long not-listening gap should re-prompt with a beep")
 	}
 
 	d.noteListenEnd(id, "ok") // the user finally spoke
