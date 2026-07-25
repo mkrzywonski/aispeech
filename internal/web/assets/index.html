@@ -130,6 +130,10 @@
   .imove { font-size: .7rem; line-height: 1; padding: .15rem .35rem; color: #888; border: 1px solid #8884; background: none; border-radius: 4px; cursor: pointer; }
   .imove:hover:not(:disabled) { color: #2d7cf0; border-color: #2d7cf0; }
   .imove:disabled { opacity: .3; cursor: default; }
+  .voicerow .drag { color: #999; cursor: grab; user-select: none; font-size: .95rem; line-height: 1; }
+  .voicerow.dragging { opacity: .45; }
+  .irow.drop-above { box-shadow: inset 0 3px 0 -1px #2d7cf0; }
+  .irow.drop-below { box-shadow: inset 0 -3px 0 -1px #2d7cf0; }
   .meter { flex: 1; min-width: 120px; max-width: 220px; height: 14px; border: 1px solid #8888; border-radius: 7px; overflow: hidden; background: #8881; }
   .meter-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#30a46c,#f5a623 70%,#e5484d); transition: width .06s linear; }
   .meter.indet .meter-fill { width: 40% !important; background: repeating-linear-gradient(45deg,#2d7cf0,#2d7cf0 8px,#2d7cf055 8px,#2d7cf055 16px); animation: slide 1s linear infinite; }
@@ -577,17 +581,31 @@ function renderInstalled(m) {
     if (c.kind !== 'whisper' || !c.installed) continue;
     rows.push(irow(c, c.primary === activeWhisper, ''));
   }
-  // Text-to-speech voices, in the user-defined order — reorder, sample, delete.
+  // Text-to-speech voices, in the user-defined order. Reorder by dragging, or
+  // with the up/down buttons; also sample or delete each.
   installedVoices = m.installed_piper || [];
   installedVoices.forEach((path, i) => {
     const c = catByPrimary[base(path)];
     if (!c) return;
+    const active = base(path) === activePiper;
+    const handle = `<span class="drag" title="Drag to reorder" aria-hidden="true">&#10303;</span>`;
     const up = `<button class="imove" data-dir="up" data-i="${i}" title="Move up" aria-label="Move up" ${i === 0 ? 'disabled' : ''}>&#9650;</button>`;
     const down = `<button class="imove" data-dir="down" data-i="${i}" title="Move down" aria-label="Move down" ${i === installedVoices.length - 1 ? 'disabled' : ''}>&#9660;</button>`;
     const sample = `<button class="play" data-voice="${esc(path)}" title="Sample ${esc(c.name)}" aria-label="Sample ${esc(c.name)}">${SPEAKER_ICON}</button>`;
-    rows.push(irow(c, base(path) === activePiper, up + down + sample));
+    rows.push(
+      `<div class="irow voicerow" draggable="true" data-vi="${i}" data-vb="${esc(base(path))}">` +
+        handle +
+        `<span class="iname">${esc(c.name)}${active ? ' <span class="pill on">active</span>' : ''}</span>` +
+        up + down + sample +
+        `<button class="idel" data-id="${esc(c.id)}" title="Delete ${esc(c.name)}" aria-label="Delete ${esc(c.name)}">Delete</button>` +
+      `</div>`);
   });
   el.innerHTML = rows.length ? rows.join('') : '<span class="muted">Nothing installed yet.</span>';
+}
+// applyOrder persists a reordered list of voice basenames and re-renders.
+async function applyOrder(order) {
+  const r = await fetch('/api/models/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
+  if (r.ok) renderModels(await r.json());
 }
 $('installed').onclick = async (e) => {
   const mv = e.target.closest('button.imove');
@@ -596,8 +614,7 @@ $('installed').onclick = async (e) => {
     const order = installedVoices.map(base);
     if (j < 0 || j >= order.length) return;
     [order[i], order[j]] = [order[j], order[i]];
-    const r = await fetch('/api/models/order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
-    if (r.ok) renderModels(await r.json());
+    applyOrder(order);
     return;
   }
   const play = e.target.closest('button.play');
@@ -614,6 +631,49 @@ $('installed').onclick = async (e) => {
   if (!r.ok) { btn.disabled = false; alert(await r.text()); return; }
   renderModels(await r.json());
 };
+// Drag-and-drop reordering of voice rows (delegated on the container so it
+// survives re-renders). Falls back to the up/down buttons.
+let dragFrom = null;
+function clearDropMarks() {
+  for (const el of $('installed').querySelectorAll('.dragging, .drop-above, .drop-below'))
+    el.classList.remove('dragging', 'drop-above', 'drop-below');
+}
+$('installed').addEventListener('dragstart', (e) => {
+  const row = e.target.closest('.voicerow');
+  if (!row) { e.preventDefault(); return; }
+  dragFrom = +row.dataset.vi;
+  row.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', row.dataset.vb); // Firefox needs payload to drag
+});
+$('installed').addEventListener('dragover', (e) => {
+  const row = e.target.closest('.voicerow');
+  if (dragFrom === null || !row) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const rect = row.getBoundingClientRect();
+  const below = (e.clientY - rect.top) > rect.height / 2;
+  clearDropMarks();
+  $('installed').querySelector('.voicerow[data-vi="' + dragFrom + '"]')?.classList.add('dragging');
+  row.classList.add(below ? 'drop-below' : 'drop-above');
+});
+$('installed').addEventListener('drop', async (e) => {
+  const row = e.target.closest('.voicerow');
+  if (dragFrom === null || !row) return;
+  e.preventDefault();
+  const rect = row.getBoundingClientRect();
+  const below = (e.clientY - rect.top) > rect.height / 2;
+  let to = +row.dataset.vi + (below ? 1 : 0);
+  const from = dragFrom;
+  clearDropMarks(); dragFrom = null;
+  if (to === from || to === from + 1) return; // dropped in place
+  const order = installedVoices.map(base);
+  const [moved] = order.splice(from, 1);
+  if (from < to) to--; // adjust for the removed element
+  order.splice(to, 0, moved);
+  applyOrder(order);
+});
+$('installed').addEventListener('dragend', () => { clearDropMarks(); dragFrom = null; });
 async function refreshModels() { if ($('settings').hidden) return; try { renderModels(await (await fetch('/api/models')).json()); } catch (e) {} }
 
 // --- connect AI agents ---
