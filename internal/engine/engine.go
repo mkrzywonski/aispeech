@@ -408,10 +408,6 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 			if !ok {
 				return
 			}
-			// Boop on every completed utterance so the user hears "captured —
-			// stop" (beep = start, boop = stop), whether it ended on a pause or
-			// the length cap.
-			go s.PlayCue(context.Background(), CueDone)
 			text, err := s.transcriber().Transcribe(ctx, seg)
 			if err != nil {
 				slog.Warn("transcribe failed", "err", err)
@@ -421,6 +417,10 @@ func (s *Service) loop(ctx context.Context, segs <-chan Segment, mode ListenMode
 			// with no listening AI must not keep a dialog alive; reset only after
 			// successful STT delivery to an AI session.
 			if s.reg.Deliver(text) {
+				// Boop only when the utterance actually reached a listening agent
+				// — "captured, stop". Stray noise and not-listening drops stay
+				// silent, matching the countdown bar (which also hides then).
+				go s.PlayCue(context.Background(), CueDone)
 				s.markDialogActivity()
 			}
 		case <-tick:
