@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -32,6 +33,30 @@ type deps struct {
 	store  *authz.Store
 	voices func() []string // installed TTS voices, for distinct per-session assignment
 	opts   Options
+
+	cueMu     sync.Mutex      // guards lastEmpty
+	lastEmpty map[string]bool // per session: did the previous listen end empty (timeout)?
+}
+
+// beepForListen reports whether to play the start-of-listen beep. A listen that
+// merely continues after an empty (timed-out) listen is not a fresh turn, so it
+// stays silent. fresh forces a beep (the caller just spoke, e.g. converse).
+func (d *deps) beepForListen(id string, fresh bool) bool {
+	d.cueMu.Lock()
+	defer d.cueMu.Unlock()
+	if fresh {
+		d.lastEmpty[id] = false
+		return true
+	}
+	return !d.lastEmpty[id]
+}
+
+// noteListenEnd records whether a listen ended empty (timed out), so the next
+// listen for this session can tell a continuation from a fresh turn.
+func (d *deps) noteListenEnd(id, status string) {
+	d.cueMu.Lock()
+	d.lastEmpty[id] = status == "timeout"
+	d.cueMu.Unlock()
 }
 
 // NewHandler builds the MCP HTTP handler. A single logical server is shared
@@ -48,7 +73,7 @@ func NewHandler(reg *session.Registry, svc *engine.Service, store *authz.Store, 
 	if opts.Version == "" {
 		opts.Version = "dev"
 	}
-	d := &deps{reg: reg, svc: svc, store: store, voices: voices, opts: opts}
+	d := &deps{reg: reg, svc: svc, store: store, voices: voices, opts: opts, lastEmpty: map[string]bool{}}
 	srv := d.build()
 	return mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return srv }, nil)
 }
@@ -258,8 +283,12 @@ func (d *deps) listen(ctx context.Context, req *mcp.CallToolRequest, in listenIn
 	if !v.Paired {
 		return nil, listenOut{}, errUnpaired
 	}
-	d.svc.PlayCue(ctx, engine.CueListen) // "go" beep so the user knows to speak
-	u, status := d.reg.Listen(ctx, req.Session.ID(), d.timeout(in.TimeoutSeconds))
+	id := req.Session.ID()
+	if d.beepForListen(id, false) { // silent when merely continuing after an empty listen
+		d.svc.PlayCue(ctx, engine.CueListen) // "go" beep so the user knows to speak
+	}
+	u, status := d.reg.Listen(ctx, id, d.timeout(in.TimeoutSeconds))
+	d.noteListenEnd(id, status)
 	return waitResult(u, status)
 }
 
@@ -270,13 +299,20 @@ func (d *deps) converse(ctx context.Context, req *mcp.CallToolRequest, in conver
 	if !v.Paired {
 		return nil, listenOut{}, errUnpaired
 	}
-	if strings.TrimSpace(in.Text) != "" {
-		if _, _, err := d.svc.SpeakAs(ctx, req.Session.ID(), in.Text); err != nil {
+	id := req.Session.ID()
+	spoke := strings.TrimSpace(in.Text) != ""
+	if spoke {
+		if _, _, err := d.svc.SpeakAs(ctx, id, in.Text); err != nil {
 			return nil, listenOut{}, fmt.Errorf("speak failed: %w", err)
 		}
 	}
-	d.svc.PlayCue(ctx, engine.CueListen) // "go" beep after the reply, before we listen
-	u, status := d.reg.Listen(ctx, req.Session.ID(), d.timeout(in.TimeoutSeconds))
+	// A spoken reply is always a fresh turn (beep); an empty converse behaves
+	// like listen and stays silent when it just continues after a timeout.
+	if d.beepForListen(id, spoke) {
+		d.svc.PlayCue(ctx, engine.CueListen) // "go" beep before we listen
+	}
+	u, status := d.reg.Listen(ctx, id, d.timeout(in.TimeoutSeconds))
+	d.noteListenEnd(id, status)
 	return waitResult(u, status)
 }
 
@@ -314,7 +350,11 @@ func (d *deps) playSound(ctx context.Context, req *mcp.CallToolRequest, in playS
 }
 
 func (d *deps) endSession(ctx context.Context, req *mcp.CallToolRequest, _ emptyIn) (*mcp.CallToolResult, okOut, error) {
-	d.reg.Detach(req.Session.ID())
+	id := req.Session.ID()
+	d.reg.Detach(id)
+	d.cueMu.Lock()
+	delete(d.lastEmpty, id)
+	d.cueMu.Unlock()
 	return nil, okOut{OK: true}, nil
 }
 
