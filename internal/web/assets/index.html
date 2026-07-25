@@ -87,7 +87,10 @@
   /* depleting bar next to the mic: time left before an utterance hits the 20s cap */
   .uttcd { display: inline-block; width: 42px; height: 5px; margin-left: 6px; border-radius: 3px; background: #8883; vertical-align: middle; overflow: hidden; }
   .uttcd-fill { display: block; height: 100%; width: 100%; background: #30a46c; transition: width .25s linear, background .25s linear; }
-  .star { color: #2d7cf0; }
+  .star { font-size: 1.15rem; line-height: 1; }
+  .star.on { color: #2d7cf0; }
+  button.star.off { border: none; background: none; padding: 0; cursor: pointer; color: #999; }
+  button.star.off:hover { color: #2d7cf0; }
 
   .log { border: 1px solid #8884; border-radius: 8px; padding: .5rem .7rem; max-height: 340px; overflow-y: auto; background: #8880; }
   .tr { padding: .25rem 0; border-bottom: 1px solid #8882; display: flex; gap: .6rem; align-items: baseline; }
@@ -1084,7 +1087,9 @@ function render(state) {
     for (const s of paired) {
       const tr = document.createElement('tr');
       if (s.focused) tr.classList.add('focus');
-      const focusCell = s.focused ? '<span class="star" aria-label="Focused session" title="Focused">★</span>' : `<button data-focus="${s.id}">focus</button>`;
+      const focusCell = s.focused
+        ? '<span class="star on" aria-label="Focused session" title="Focused">&#9733;</span>'
+        : `<button class="star off" data-focus="${s.id}" aria-label="Give focus to this session" title="Give focus">&#9734;</button>`;
       tr.innerHTML = `
         <td><input class="name-in" value="${esc(s.name)}" data-rename="${s.id}" aria-label="Session name (wake word)"></td>
         <td class="muted">${esc(s.client_name)}</td>
