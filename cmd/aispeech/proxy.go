@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -89,7 +90,9 @@ type hubForwarder struct {
 func newHubForwarder(endpoint, name string) *hubForwarder {
 	return &hubForwarder{
 		endpoint: endpoint,
-		client:   mcp.NewClient(&mcp.Implementation{Name: name, Version: fullVersion()}, nil),
+		// KeepAlive holds the hub connection open through long idle listen/converse
+		// waits, so a quiet stretch doesn't drop the transport and surface as an error.
+		client:   mcp.NewClient(&mcp.Implementation{Name: name, Version: fullVersion()}, &mcp.ClientOptions{KeepAlive: 30 * time.Second}),
 	}
 }
 

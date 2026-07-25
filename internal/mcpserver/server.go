@@ -71,7 +71,10 @@ const AgentInstructions = "This server is the voice channel to use when the user
 
 func (d *deps) build() *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "aispeech", Version: d.opts.Version},
-		&mcp.ServerOptions{Instructions: AgentInstructions})
+		// KeepAlive pings keep a long listen/converse wait's connection alive, so
+		// an idle stretch returns a clean "timeout" status rather than dropping
+		// the transport (which would surface to the agent as an error).
+		&mcp.ServerOptions{Instructions: AgentInstructions, KeepAlive: 30 * time.Second})
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "start_voice_conversation",
@@ -93,16 +96,19 @@ func (d *deps) build() *mcp.Server {
 		Description: "Speak a short reply AND immediately wait for the user's next spoken command — " +
 			"the natural way to stay in a voice dialog. Prefer this over speak-then-end-turn: after " +
 			"handling a voice command, call converse with your reply to keep the conversation going. " +
-			"Returns the next utterance (status \"ok\") or a terminal status (\"timeout\", " +
-			"\"cancelled\"). On \"timeout\", call converse or listen again while voice mode is active.",
+			"Returns the next utterance (status \"ok\") or a status (\"timeout\", " +
+			"\"cancelled\"). A \"timeout\" is NORMAL, not an error — it just means no speech yet " +
+			"(like a terminal with no keystrokes); simply call converse or listen again. Keep " +
+			"looping for as long as the user might return — minutes or hours of silence are fine.",
 	}, d.converse)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "listen",
 		Description: "Wait for the user's next spoken command and return the transcript, WITHOUT " +
 			"speaking first. Use converse instead when you have a spoken reply. Blocks until speech " +
-			"is routed here or the timeout elapses; status \"timeout\" means call again to keep " +
-			"waiting. Stay in the listen/converse loop to keep the voice dialog alive.",
+			"is routed here or the timeout elapses. A \"timeout\" is NORMAL, not an error — it just " +
+			"means no speech yet (like a terminal with no keystrokes); call listen again to keep " +
+			"waiting, even across minutes or hours of silence. Stay in the loop to keep voice alive.",
 	}, d.listen)
 
 	mcp.AddTool(s, &mcp.Tool{
