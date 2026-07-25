@@ -569,7 +569,6 @@ function irow(c, active, controls) {
 function renderInstalled(m) {
   const el = $('installed');
   const activeWhisper = base(m.whisper_model || '');
-  const activePiper = base(m.piper_voice || '');
   const catByPrimary = {};
   for (const c of (m.catalog || [])) catByPrimary[c.primary] = c;
   const rows = [];
@@ -584,13 +583,13 @@ function renderInstalled(m) {
   installedVoices.forEach((path, i) => {
     const c = catByPrimary[base(path)];
     if (!c) return;
-    const active = base(path) === activePiper;
+    // No "active" pill here: voices are assigned per session, not globally.
     const handle = `<span class="drag" title="Drag to reorder" aria-hidden="true">&#10303;</span>`;
     const sample = `<button class="play" data-voice="${esc(path)}" title="Sample ${esc(c.name)}" aria-label="Sample ${esc(c.name)}">${SPEAKER_ICON}</button>`;
     rows.push(
       `<div class="irow voicerow" draggable="true" data-vi="${i}" data-vb="${esc(base(path))}">` +
         handle +
-        `<span class="iname">${esc(c.name)}${active ? ' <span class="pill on">active</span>' : ''}</span>` +
+        `<span class="iname">${esc(c.name)}</span>` +
         sample +
         `<button class="idel" data-id="${esc(c.id)}" title="Delete ${esc(c.name)}" aria-label="Delete ${esc(c.name)}">Delete</button>` +
       `</div>`);
